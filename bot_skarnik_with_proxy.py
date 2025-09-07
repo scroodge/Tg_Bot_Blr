@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+"""
+Версия bot_skarnik.py с поддержкой прокси для обхода блокировок
+"""
+
 import os
 import sys
 import threading
@@ -9,6 +14,7 @@ from urllib.parse import quote
 
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import Application, CommandHandler, MessageHandler, InlineQueryHandler, filters, ContextTypes
+from telegram.request import HTTPXRequest
 from uuid import uuid4
 
 ENV_PATH = ".env"
@@ -39,6 +45,31 @@ def load_or_ask_token() -> str:
         f.write(f"TELEGRAM_BOT_TOKEN={token}\n")
     os.environ["TELEGRAM_BOT_TOKEN"] = token
     return token
+
+def get_proxy_config():
+    """Получает настройки прокси из переменных окружения"""
+    proxy_url = os.environ.get("PROXY_URL")
+    if proxy_url:
+        print(f"🔧 Используется прокси: {proxy_url}")
+        return {
+            "proxy_url": proxy_url,
+            "proxy_auth": None
+        }
+    
+    # Проверяем .env файл
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("PROXY_URL="):
+                    proxy_url = line.split("=", 1)[1].strip()
+                    if proxy_url:
+                        print(f"🔧 Используется прокси из .env: {proxy_url}")
+                        return {
+                            "proxy_url": proxy_url,
+                            "proxy_auth": None
+                        }
+    
+    return None
 
 # Переводчик через онлайн-словарь Skarnik
 class SkarnikTranslator:
@@ -233,7 +264,7 @@ class FallbackTranslator:
             if ru in text:
                 return f"Частковы пераклад: {be} (для '{ru}')"
         
-        return "Пераклад не знойдзены ў базе. Паспрабуйте іншы тэкст."
+        return "Пераклад не знойдзены ў базе. Паспрабуйце іншы тэкст."
 
 translator: Optional[SkarnikTranslator] = None
 fallback_translator: Optional[FallbackTranslator] = None
@@ -256,7 +287,7 @@ async def ensure_translator():
     
     return translator, fallback_translator
 
-# Команды
+# Команды (упрощенные версии)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "Прывітанне! Я перакладаю з рускай на беларускую праз Skarnik 🎯\n\n"
@@ -268,8 +299,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Каманды:\n"
         "/start - пачатак\n"
         "/help - дапамога\n"
-        "/status - статус перакладчыка\n"
-        "/test - тэст перакладу"
+        "/status - статус перакладчыка"
     )
     await update.message.reply_text(msg)
 
@@ -279,8 +309,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Інлайн: @ІмяБота ваш рускі тэкст.\n\n"
         "Бот выкарыстоўвае онлайн-слоўнік Skarnik для перакладу.\n"
         "Каманды:\n"
-        "/status - статус перакладчыка\n"
-        "/test - тэст перакладу"
+        "/status - статус перакладчыка"
     )
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -296,29 +325,6 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "❌ Skarnik перакладчык не даступны\n💡 Выкарыстоўваецца fallback перакладчык"
     
     await update.message.reply_text(msg)
-
-async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тестирование качества перевода"""
-    if not context.args:
-        await update.message.reply_text(
-            "Выкарыстоўвайце: /test <рускі тэкст>\n\n"
-            "Прыклад: /test как дела моя хорошая"
-        )
-        return
-    
-    test_text = " ".join(context.args)
-    skarnik_tr, fallback_tr = await ensure_translator()
-    
-    if skarnik_tr:
-        await update.message.reply_text(f"🎯 Тэст перакладу праз Skarnik:\n\nРускі: {test_text}\n\nПеракладаю...")
-        
-        try:
-            be = skarnik_tr.translate_ru_to_be(test_text)
-            await update.message.reply_text(f"Беларускі: {be}")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Памылка: {e}")
-    else:
-        await update.message.reply_text("❌ Skarnik перакладчык не даступны")
 
 # Перевод обычных сообщений
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,7 +347,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Если Skarnik не сработал, используем fallback
         be = fallback_tr.translate_ru_to_be(text)
         if not be or be.startswith("Пераклад не знойдзены"):
-            be = "Пераклад не атрымаўся. Паспрабуйте иншы тэкст."
+            be = "Пераклад не атрымаўся. Паспрабуйце іншы тэкст."
         
         # Удаляем сообщение об ожидании и отправляем перевод
         await wait_message.delete()
@@ -352,11 +358,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_message.delete()
         await update.message.reply_text(f"Памылка перакладу: {e}")
 
-# Инлайн-режим: @BotName <русский текст>
+# Инлайн-режим
 async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = (update.inline_query.query or "").strip()
     if not query:
-        # Покажем подсказку-пустышку, чтобы было что выбрать
         results = [
             InlineQueryResultArticle(
                 id=str(uuid4()),
@@ -407,7 +412,7 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 id=str(uuid4()),
                 title="Памылка перакладу",
                 input_message_content=InputTextMessageContent(f"Памылка: {e}"),
-                description="Праверце тэкст і паспрабуйте зноў"
+                description="Праверце тэкст і паспрабуйце зноў"
             )
         ]
         await update.inline_query.answer(results, cache_time=0, is_personal=True)
@@ -415,41 +420,57 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     token = load_or_ask_token()
     
-    # Настройка с retry и обработкой ошибок
-    app = Application.builder().token(token).build()
+    # Настройка прокси
+    proxy_config = get_proxy_config()
     
-    # Добавляем обработчик ошибок
+    if proxy_config:
+        # Создаем HTTPXRequest с прокси
+        request = HTTPXRequest(
+            proxy_url=proxy_config["proxy_url"],
+            proxy_auth=proxy_config["proxy_auth"]
+        )
+        app = Application.builder().token(token).request(request).build()
+        print("🔧 Бот запущен с прокси")
+    else:
+        app = Application.builder().token(token).build()
+        print("🌐 Бот запущен без прокси")
+    
+    # Обработчик ошибок
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Логирует ошибки, вызванные обновлениями."""
         print(f"Ошибка при обработке обновления: {context.error}")
         
-        # Если это NetworkError, пробуем переподключиться
         if "NetworkError" in str(context.error) or "httpx.ReadError" in str(context.error):
-            print("Обнаружена сетевая ошибка. Бот будет пытаться переподключиться...")
-            # Здесь можно добавить логику переподключения
+            print("Обнаружена сетевая ошибка. Проверьте подключение или настройте прокси.")
 
     app.add_error_handler(error_handler)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
-    app.add_handler(CommandHandler("test", test_cmd))
     app.add_handler(InlineQueryHandler(on_inline_query))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     print("🔍 Бот перакладу праз Skarnik запущен. Наберите Ctrl+C для остановки.")
     print("💡 Выкарыстоўваю онлайн-слоўнік Skarnik для перакладу...")
     
-    # Запуск с retry логикой
+    if not proxy_config:
+        print("\n💡 Если Telegram заблокирован, добавьте в .env файл:")
+        print("PROXY_URL=http://your-proxy:port")
+        print("или")
+        print("PROXY_URL=socks5://your-proxy:port")
+    
     try:
         app.run_polling(
             close_loop=False,
-            drop_pending_updates=True,  # Игнорируем старые обновления
-            allowed_updates=["message", "inline_query"]  # Только нужные типы обновлений
+            drop_pending_updates=True,
+            allowed_updates=["message", "inline_query"]
         )
     except Exception as e:
         print(f"Критическая ошибка: {e}")
-        print("Попробуйте перезапустить бота или проверить интернет-соединение")
+        print("Попробуйте:")
+        print("1. Проверить интернет-соединение")
+        print("2. Настроить прокси")
+        print("3. Перезапустить бота")
 
 if __name__ == "__main__":
     main()

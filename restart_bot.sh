@@ -2,7 +2,7 @@
 
 # Скрипт для автоматического перезапуска бота при ошибках
 
-BOT_SCRIPT="bot.py"
+BOT_SCRIPT="bot_skarnik.py"
 LOG_FILE="bot.log"
 MAX_RESTARTS=10
 RESTART_DELAY=5
