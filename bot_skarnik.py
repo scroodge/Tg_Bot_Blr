@@ -336,13 +336,17 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_username = (await context.bot.get_me()).username
     
     # Проверяем, есть ли упоминание бота в тексте
-    mention_pattern = f"@{bot_username}\\s+(\\S+)"
+    mention_pattern = f"@{bot_username}\\s+(.+)"
     import re
     mention_match = re.search(mention_pattern, text, re.IGNORECASE)
     
     if mention_match:
-        # Если есть упоминание, переводим только указанное слово
-        word_to_translate = mention_match.group(1)
+        # Если есть упоминание, переводим только последнее слово из фразы
+        phrase_after_mention = mention_match.group(1).strip()
+        # Берем только последнее слово
+        words = phrase_after_mention.split()
+        word_to_translate = words[-1] if words else phrase_after_mention
+        
         skarnik_tr, fallback_tr = await ensure_translator()
         
         # Отправляем сообщение о том, что перевод в процессе
