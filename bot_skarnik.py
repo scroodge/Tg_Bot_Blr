@@ -258,11 +258,14 @@ async def ensure_translator():
 
 # Команды
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bot_username = (await context.bot.get_me()).username
     msg = (
         "Прывітанне! Я перакладаю з рускай на беларускую праз Skarnik 🎯\n\n"
+        "📝 Спосабы выкарыстання:\n"
         "• Напішыце мне тэкст — я адкажу перакладам.\n"
         "• У любым чаце ўвядзіце: @"
-        f"{(await context.bot.get_me()).username} ваш рускі тэкст — і ўстаўце вынік.\n\n"
+        f"{bot_username} ваш рускі тэкст — і ўстаўце вынік.\n"
+        f"• Для перакладу аднаго слова: Добрае @{bot_username} утро\n\n"
         "Крыніца: онлайн-слоўнік Skarnik (107,141 слова).\n"
         "У выпадку памылкі выкарыстоўваецца fallback перакладчык.\n\n"
         "Каманды:\n"
@@ -274,9 +277,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bot_username = (await context.bot.get_me()).username
     await update.message.reply_text(
-        "Проста дашліце рускі тэкст — я перакладу на беларускую.\n"
-        "Інлайн: @ІмяБота ваш рускі тэкст.\n\n"
+        "📝 Спосабы выкарыстання:\n\n"
+        "1️⃣ Пераклад поўнага тэксту:\n"
+        "Напішыце мне рускі тэкст — я адкажу перакладам.\n\n"
+        "2️⃣ Інлайн-рэжым:\n"
+        f"@{bot_username} ваш рускі тэкст\n\n"
+        f"3️⃣ Пераклад аднаго слова:\n"
+        f"Добрае @{bot_username} утро\n"
+        f"Спасибо @{bot_username} большое\n\n"
         "Бот выкарыстоўвае онлайн-слоўнік Skarnik для перакладу.\n"
         "Каманды:\n"
         "/status - статус перакладчыка\n"
@@ -323,34 +333,74 @@ async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Перевод обычных сообщений
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    skarnik_tr, fallback_tr = await ensure_translator()
+    bot_username = (await context.bot.get_me()).username
     
-    # Отправляем сообщение о том, что перевод в процессе
-    wait_message = await update.message.reply_text("🔍 Шукаю пераклад у Skarnik...")
+    # Проверяем, есть ли упоминание бота в тексте
+    mention_pattern = f"@{bot_username}\\s+(\\S+)"
+    import re
+    mention_match = re.search(mention_pattern, text, re.IGNORECASE)
     
-    try:
-        if skarnik_tr:
-            # Пробуем Skarnik переводчик
-            be = skarnik_tr.translate_ru_to_be(text)
-            if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
-                # Удаляем сообщение об ожидании и отправляем перевод
-                await wait_message.delete()
-                await update.message.reply_text(be)
-                return
+    if mention_match:
+        # Если есть упоминание, переводим только указанное слово
+        word_to_translate = mention_match.group(1)
+        skarnik_tr, fallback_tr = await ensure_translator()
         
-        # Если Skarnik не сработал, используем fallback
-        be = fallback_tr.translate_ru_to_be(text)
-        if not be or be.startswith("Пераклад не знойдзены"):
-            be = "Пераклад не атрымаўся. Паспрабуйте иншы тэкст."
+        # Отправляем сообщение о том, что перевод в процессе
+        wait_message = await update.message.reply_text(f"🔍 Шукаю пераклад слова '{word_to_translate}' у Skarnik...")
         
-        # Удаляем сообщение об ожидании и отправляем перевод
-        await wait_message.delete()
-        await update.message.reply_text(be)
+        try:
+            if skarnik_tr:
+                # Пробуем Skarnik переводчик
+                be = skarnik_tr.translate_ru_to_be(word_to_translate)
+                if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
+                    # Удаляем сообщение об ожидании и отправляем перевод
+                    await wait_message.delete()
+                    await update.message.reply_text(f"'{word_to_translate}' → '{be}'")
+                    return
+            
+            # Если Skarnik не сработал, используем fallback
+            be = fallback_tr.translate_ru_to_be(word_to_translate)
+            if not be or be.startswith("Пераклад не знойдзены"):
+                be = "пераклад не знойдзены"
+            
+            # Удаляем сообщение об ожидании и отправляем перевод
+            await wait_message.delete()
+            await update.message.reply_text(f"'{word_to_translate}' → '{be}'")
+            
+        except Exception as e:
+            # Удаляем сообщение об ожидании и отправляем ошибку
+            await wait_message.delete()
+            await update.message.reply_text(f"Памылка перакладу: {e}")
+    else:
+        # Если нет упоминания, переводим весь текст как обычно
+        skarnik_tr, fallback_tr = await ensure_translator()
         
-    except Exception as e:
-        # Удаляем сообщение об ожидании и отправляем ошибку
-        await wait_message.delete()
-        await update.message.reply_text(f"Памылка перакладу: {e}")
+        # Отправляем сообщение о том, что перевод в процессе
+        wait_message = await update.message.reply_text("🔍 Шукаю пераклад у Skarnik...")
+        
+        try:
+            if skarnik_tr:
+                # Пробуем Skarnik переводчик
+                be = skarnik_tr.translate_ru_to_be(text)
+                if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
+                    # Удаляем сообщение об ожидании и отправляем перевод
+                    await wait_message.delete()
+                    await update.message.reply_text(be)
+                    return
+            
+            # Если Skarnik не сработал, используем fallback
+            be = fallback_tr.translate_ru_to_be(text)
+            if not be or be.startswith("Пераклад не знойдзены"):
+                be = "Пераклад не атрымаўся. Паспрабуйце іншы тэкст."
+            
+            # Удаляем сообщение об ожидании и отправляем перевод
+            await wait_message.delete()
+            await update.message.reply_text(be)
+            
+        except Exception as e:
+            # Удаляем сообщение об ожидании и отправляем ошибку
+            await wait_message.delete()
+            await update.message.reply_text(f"Памылка перакладу: {e}")
 
 # Инлайн-режим: @BotName <русский текст>
 async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
