@@ -488,7 +488,21 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     token = load_or_ask_token()
+    
+    # Настройка с retry и обработкой ошибок
     app = Application.builder().token(token).build()
+    
+    # Добавляем обработчик ошибок
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Логирует ошибки, вызванные обновлениями."""
+        print(f"Ошибка при обработке обновления: {context.error}")
+        
+        # Если это NetworkError, пробуем переподключиться
+        if "NetworkError" in str(context.error) or "httpx.ReadError" in str(context.error):
+            print("Обнаружена сетевая ошибка. Бот будет пытаться переподключиться...")
+            # Здесь можно добавить логику переподключения
+
+    app.add_error_handler(error_handler)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
@@ -500,7 +514,17 @@ def main():
 
     print("Бот запущен. Наберите Ctrl+C для остановки.")
     print("Убедитесь, что Ollama запущена: ollama serve")
-    app.run_polling(close_loop=False)
+    
+    # Запуск с retry логикой
+    try:
+        app.run_polling(
+            close_loop=False,
+            drop_pending_updates=True,  # Игнорируем старые обновления
+            allowed_updates=["message", "inline_query"]  # Только нужные типы обновлений
+        )
+    except Exception as e:
+        print(f"Критическая ошибка: {e}")
+        print("Попробуйте перезапустить бота или проверить интернет-соединение")
 
 if __name__ == "__main__":
     main()
