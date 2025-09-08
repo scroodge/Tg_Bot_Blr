@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
 Telegram бот для перевода с русского на белорусский через Google Translate API
+Совместим с python-telegram-bot==13.15
 """
 
 import os
 import sys
 import threading
 import time
+import re
 from typing import Optional
 
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
-from telegram.ext import Application, CommandHandler, MessageHandler, InlineQueryHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, InlineQueryHandler, Filters, CallbackContext
 from uuid import uuid4
 
 # Google Translate API
@@ -97,19 +99,6 @@ class FallbackTranslator:
             "плохо": "дрэнна",
             "как дела": "як справы",
             "до свидания": "да пабачэння",
-            "как тебя зовут": "як цябе завуць",
-            "меня зовут": "мяне завуць",
-            "где ты живешь": "дзе ты жывеш",
-            "сколько тебе лет": "колькі табе гадоў",
-            "не надо": "не трэба",
-            "в кровати": "у пасцелі",
-            "так хорошо": "так добра",
-            "моя хорошая": "мая дарагая",
-            "люблю тебя": "кахаю цябе",
-            "спокойной ночи": "спакойнай ночы",
-            "что делаешь": "што робіш",
-            "где ты": "дзе ты",
-            "когда придешь": "калі прыйдзеш",
             "утро": "раніца",
             "день": "дзень",
             "вечер": "вечар",
@@ -130,9 +119,6 @@ class FallbackTranslator:
             "ветка": "галіна",
             "плод": "плод",
             "семя": "семя",
-            "лист": "ліст",
-            "ветка": "галіна",
-            "корень": "корань",
             "ствол": "ствол",
             "кора": "кара",
             "сок": "сок",
@@ -154,19 +140,36 @@ class FallbackTranslator:
             "стрекоза": "стракоза",
             "комар": "камар",
             "муха": "муха",
-            "оса": "аса",
-            "пчела": "пчала",
-            "шмель": "шмель",
-            "бабочка": "матылёк",
-            "жук": "жук",
-            "паук": "павук",
-            "муравей": "мурашка",
-            "кузнечик": "конік",
-            "сверчок": "цвыркун",
-            "цикада": "цыкада",
-            "стрекоза": "стракоза",
-            "комар": "камар",
-            "муха": "муха"
+            "дела": "справы",
+            "работа": "праца",
+            "дом": "дом",
+            "семья": "сям'я",
+            "друг": "сябар",
+            "любовь": "каханне",
+            "счастье": "шчасце",
+            "грусть": "сум",
+            "радость": "радасць",
+            "смех": "смех",
+            "плач": "плач",
+            "сон": "сон",
+            "мечта": "мара",
+            "надежда": "надзея",
+            "вера": "вера",
+            "правда": "праўда",
+            "ложь": "хлусня",
+            "добро": "дабро",
+            "зло": "зло",
+            "красота": "прыгажосць",
+            "уродство": "брыдота",
+            "молодость": "маладосць",
+            "старость": "старасць",
+            "жизнь": "жыццё",
+            "смерть": "смерць",
+            "рождение": "нараджэнне",
+            "взросление": "узросценне",
+            "детство": "дзяцінства",
+            "юность": "юнацтва",
+            "зрелость": "сталасць"
         }
     
     def translate_ru_to_be(self, text: str, max_len: int = 512) -> str:
@@ -189,7 +192,7 @@ translator: Optional[GoogleTranslator] = None
 fallback_translator: Optional[FallbackTranslator] = None
 translator_lock = threading.Lock()
 
-async def ensure_translator():
+def ensure_translator():
     global translator, fallback_translator
     
     if translator is None:
@@ -207,8 +210,8 @@ async def ensure_translator():
     return translator, fallback_translator
 
 # Команды
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bot_username = (await context.bot.get_me()).username
+def start(update: Update, context: CallbackContext):
+    bot_username = context.bot.username
     msg = (
         "Прывітанне! Я перакладаю з рускай на беларускую праз Google Translate 🌐\n\n"
         "📝 Спосабы выкарыстання:\n"
@@ -221,14 +224,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Каманды:\n"
         "/start - пачатак\n"
         "/help - дапамога\n"
-        "/status - статус перакладчыка\n"
-        "/test - тэст перакладу"
+        "/status - статус перакладчыка"
     )
-    await update.message.reply_text(msg)
+    update.message.reply_text(msg)
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bot_username = (await context.bot.get_me()).username
-    await update.message.reply_text(
+def help_cmd(update: Update, context: CallbackContext):
+    bot_username = context.bot.username
+    update.message.reply_text(
         "📝 Спосабы выкарыстання:\n\n"
         "1️⃣ Пераклад поўнага тэксту:\n"
         "Напішыце мне рускі тэкст — я адкажу перакладам.\n\n"
@@ -239,11 +241,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Спасибо @{bot_username} большое\n\n"
         "Бот выкарыстоўвае Google Translate API для перакладу.\n"
         "Каманды:\n"
-        "/status - статус перакладчыка\n"
-        "/test - тэст перакладу"
+        "/status - статус перакладчыка"
     )
 
-async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def status_cmd(update: Update, context: CallbackContext):
     """Проверяет статус переводчика"""
     global translator
     
@@ -255,42 +256,14 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         msg = "❌ Google Translate перакладчык не даступны\n💡 Выкарыстоўваецца fallback перакладчык"
     
-    await update.message.reply_text(msg)
-
-async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тестирование качества перевода"""
-    if not context.args:
-        await update.message.reply_text(
-            "Выкарыстоўвайце: /test <рускі тэкст>\n\n"
-            "Прыклад: /test как дела моя хорошая"
-        )
-        return
-    
-    test_text = " ".join(context.args)
-    google_tr, fallback_tr = await ensure_translator()
-    
-    if google_tr:
-        await update.message.reply_text(f"🌐 Тэст перакладу праз Google Translate:\n\nРускі: {test_text}\n\nПеракладаю...")
-        
-        try:
-            be = google_tr.translate_ru_to_be(test_text)
-            await update.message.reply_text(f"Беларускі: {be}")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Памылка: {e}")
-    else:
-        await update.message.reply_text("❌ Google Translate перакладчык не даступны")
+    update.message.reply_text(msg)
 
 # Перевод обычных сообщений
-async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def on_text(update: Update, context: CallbackContext):
     text = update.message.text
-    bot_username = (await context.bot.get_me()).username
-    bot_id = (await context.bot.get_me()).id
+    bot_username = context.bot.username
     
     print(f"📨 ПОЛУЧЕНО СООБЩЕНИЕ: '{text}'")
-    print(f"🔍 Username бота: {bot_username}")
-    print(f"🔍 ID бота: {bot_id}")
-    print(f"🔍 Chat ID: {update.message.chat_id}")
-    print(f"🔍 Chat type: {update.message.chat.type}")
     
     # Проверяем, есть ли упоминание бота через entities (для групп)
     is_mentioned = False
@@ -316,18 +289,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_mentioned:
         # Проверяем, есть ли упоминание бота в тексте
         mention_pattern = f"@{bot_username}\\s+(.+)"
-        import re
         mention_match = re.search(mention_pattern, text, re.IGNORECASE)
-        
-        print(f"🔍 Паттерн с @: {mention_pattern}")
-        print(f"🔍 Найдено совпадение с @: {mention_match is not None}")
         
         # Также проверяем, есть ли упоминание без @ (для личных чатов)
         simple_mention_pattern = f"{bot_username}\\s+(.+)"
         simple_mention_match = re.search(simple_mention_pattern, text, re.IGNORECASE)
-        
-        print(f"🔍 Простой паттерн: {simple_mention_pattern}")
-        print(f"🔍 Найдено простое совпадение: {simple_mention_match is not None}")
         
         if mention_match:
             phrase_after_mention = mention_match.group(1).strip()
@@ -338,33 +304,28 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if is_mentioned:
         # Если есть упоминание, переводим только последнее слово из фразы
-        # Берем только последнее слово
         words = phrase_after_mention.split()
         word_to_translate = words[-1] if words else phrase_after_mention
         
         print(f"🔍 Обрабатываю упоминание: '{phrase_after_mention}' -> слово: '{word_to_translate}'")
         
-        google_tr, fallback_tr = await ensure_translator()
+        google_tr, fallback_tr = ensure_translator()
         
         try:
             # Отправляем сообщение о том, что перевод в процессе
-            wait_message = await update.message.reply_text(f"🌐 Шукаю пераклад слова '{word_to_translate}' у Google...")
+            wait_message = update.message.reply_text(f"🌐 Шукаю пераклад слова '{word_to_translate}' у Google...")
             
             if google_tr:
                 # Пробуем Google Translate
                 be = google_tr.translate_ru_to_be(word_to_translate)
-                print(f"🔍 Результат Google: '{be}'")
                 if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
                     # Удаляем сообщение об ожидании и отправляем перевод
                     try:
-                        await wait_message.delete()
+                        wait_message.delete()
                     except:
-                        pass  # Игнорируем ошибки удаления сообщения
-                    print(f"✅ Отправляю перевод: '{word_to_translate}' → '{be}'")
-                    await update.message.reply_text(f"'{word_to_translate}' → '{be}'")
+                        pass
+                    update.message.reply_text(f"'{word_to_translate}' → '{be}'")
                     return
-                else:
-                    print(f"❌ Google не нашел перевод или ошибка: '{be}'")
             
             # Если Google не сработал, используем fallback
             be = fallback_tr.translate_ru_to_be(word_to_translate)
@@ -373,26 +334,24 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Удаляем сообщение об ожидании и отправляем перевод
             try:
-                await wait_message.delete()
+                wait_message.delete()
             except:
-                pass  # Игнорируем ошибки удаления сообщения
-            print(f"✅ Отправляю fallback перевод: '{word_to_translate}' → '{be}'")
-            await update.message.reply_text(f"'{word_to_translate}' → '{be}'")
+                pass
+            update.message.reply_text(f"'{word_to_translate}' → '{be}'")
             
         except Exception as e:
             print(f"❌ Ошибка при обработке упоминания: {e}")
-            # Удаляем сообщение об ожидании и отправляем ошибку
             try:
-                await wait_message.delete()
+                wait_message.delete()
             except:
-                pass  # Игнорируем ошибки удаления сообщения
-            await update.message.reply_text(f"Памылка перакладу: {e}")
+                pass
+            update.message.reply_text(f"Памылка перакладу: {e}")
     else:
         # Если нет упоминания, переводим весь текст как обычно
-        google_tr, fallback_tr = await ensure_translator()
+        google_tr, fallback_tr = ensure_translator()
         
         # Отправляем сообщение о том, что перевод в процессе
-        wait_message = await update.message.reply_text("🌐 Шукаю пераклад у Google...")
+        wait_message = update.message.reply_text("🌐 Шукаю пераклад у Google...")
         
         try:
             if google_tr:
@@ -401,10 +360,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
                     # Удаляем сообщение об ожидании и отправляем перевод
                     try:
-                        await wait_message.delete()
+                        wait_message.delete()
                     except:
-                        pass  # Игнорируем ошибки удаления сообщения
-                    await update.message.reply_text(be)
+                        pass
+                    update.message.reply_text(be)
                     return
             
             # Если Google не сработал, используем fallback
@@ -414,27 +373,25 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Удаляем сообщение об ожидании и отправляем перевод
             try:
-                await wait_message.delete()
+                wait_message.delete()
             except:
-                pass  # Игнорируем ошибки удаления сообщения
-            await update.message.reply_text(be)
+                pass
+            update.message.reply_text(be)
             
         except Exception as e:
             # Удаляем сообщение об ожидании и отправляем ошибку
             try:
-                await wait_message.delete()
+                wait_message.delete()
             except:
-                pass  # Игнорируем ошибки удаления сообщения
-            await update.message.reply_text(f"Памылка перакладу: {e}")
+                pass
+            update.message.reply_text(f"Памылка перакладу: {e}")
 
 # Инлайн-режим
-async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def on_inline_query(update: Update, context: CallbackContext):
     query = (update.inline_query.query or "").strip()
     print(f"🔍 ИНЛАЙН ЗАПРОС: '{query}'")
     
     if not query:
-        print("🔍 Пустой инлайн запрос, показываю подсказку")
-        # Покажем подсказку-пустышку, чтобы было что выбрать
         results = [
             InlineQueryResultArticle(
                 id=str(uuid4()),
@@ -443,19 +400,16 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 description="Я перакладу на беларускую праз Google Translate"
             )
         ]
-        await update.inline_query.answer(results, cache_time=0, is_personal=True)
+        update.inline_query.answer(results, cache_time=0, is_personal=True)
         return
 
-    google_tr, fallback_tr = await ensure_translator()
-    print(f"🔍 Переводчик инициализирован: {google_tr is not None}")
+    google_tr, fallback_tr = ensure_translator()
     
     try:
         if google_tr:
             # Пробуем Google Translate
             be = google_tr.translate_ru_to_be(query)
-            print(f"🔍 Результат Google для инлайн: '{be}'")
             if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
-                print(f"✅ Отправляю инлайн результат: '{query}' → '{be}'")
                 results = [
                     InlineQueryResultArticle(
                         id=str(uuid4()),
@@ -464,10 +418,8 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         description=be[:120]
                     )
                 ]
-                await update.inline_query.answer(results, cache_time=0, is_personal=True)
+                update.inline_query.answer(results, cache_time=0, is_personal=True)
                 return
-            else:
-                print(f"❌ Google не нашел перевод для инлайн: '{be}'")
         
         # Если Google не сработал, используем fallback
         be = fallback_tr.translate_ru_to_be(query)
@@ -482,7 +434,7 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 description=be[:120]
             )
         ]
-        await update.inline_query.answer(results, cache_time=0, is_personal=True)
+        update.inline_query.answer(results, cache_time=0, is_personal=True)
         
     except Exception as e:
         print(f"❌ Ошибка в инлайн-режиме: {e}")
@@ -494,7 +446,11 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 description="Праверце тэкст і паспрабуйце зноў"
             )
         ]
-        await update.inline_query.answer(results, cache_time=0, is_personal=True)
+        update.inline_query.answer(results, cache_time=0, is_personal=True)
+
+def error_handler(update: Update, context: CallbackContext):
+    """Обработчик ошибок"""
+    print(f"Ошибка при обработке обновления: {context.error}")
 
 def main():
     if not GOOGLE_AVAILABLE:
@@ -503,48 +459,32 @@ def main():
     
     token = load_or_ask_token()
     
-    # Настройка с retry и обработкой ошибок (упрощенная версия)
-    try:
-        app = Application.builder().token(token).build()
-        print(f"🔧 Токен: {token[:10]}...")
-        print(f"🔧 Приложение создано")
-    except Exception as e:
-        print(f"❌ Ошибка создания приложения: {e}")
-        print("💡 Попробуйте обновить зависимости:")
-        print("pip install --upgrade python-telegram-bot httpx")
-        sys.exit(1)
+    # Создаем Updater для старой версии API
+    updater = Updater(token=token, use_context=True)
+    dispatcher = updater.dispatcher
+    
+    print(f"🔧 Токен: {token[:10]}...")
+    print(f"🔧 Updater создан")
+    
+    # Добавляем обработчики
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("help", help_cmd))
+    dispatcher.add_handler(CommandHandler("status", status_cmd))
+    dispatcher.add_handler(InlineQueryHandler(on_inline_query))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, on_text))
     
     # Добавляем обработчик ошибок
-    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Логирует ошибки, вызванные обновлениями."""
-        print(f"Ошибка при обработке обновления: {context.error}")
-        
-        # Если это NetworkError, пробуем переподключиться
-        if "NetworkError" in str(context.error) or "httpx.ReadError" in str(context.error):
-            print("Обнаружена сетевая ошибка. Бот будет пытаться переподключиться...")
-
-    app.add_error_handler(error_handler)
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("status", status_cmd))
-    app.add_handler(CommandHandler("test", test_cmd))
-    app.add_handler(InlineQueryHandler(on_inline_query))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    dispatcher.add_error_handler(error_handler)
 
     print("🌐 Бот перакладу праз Google Translate запущен. Наберите Ctrl+C для остановки.")
     print("💡 Выкарыстоўваю Google Translate API для перакладу...")
     
-    # Запуск с retry логикой
+    # Запускаем бота
     try:
-        app.run_polling(
-            close_loop=False,
-            drop_pending_updates=True,  # Игнорируем старые обновления
-            allowed_updates=["message", "inline_query"]  # Только нужные типы обновлений
-        )
+        updater.start_polling()
+        updater.idle()
     except Exception as e:
         print(f"Критическая ошибка: {e}")
-        print("Попробуйте перезапустить бота или проверить интернет-соединение")
 
 if __name__ == "__main__":
     main()
