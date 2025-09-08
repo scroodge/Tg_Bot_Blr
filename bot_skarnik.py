@@ -347,18 +347,23 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         words = phrase_after_mention.split()
         word_to_translate = words[-1] if words else phrase_after_mention
         
+        print(f"🔍 Обрабатываю упоминание: '{phrase_after_mention}' -> слово: '{word_to_translate}'")
+        
         skarnik_tr, fallback_tr = await ensure_translator()
         
-        # Отправляем сообщение о том, что перевод в процессе
-        wait_message = await update.message.reply_text(f"🔍 Шукаю пераклад слова '{word_to_translate}' у Skarnik...")
-        
         try:
+            # Отправляем сообщение о том, что перевод в процессе
+            wait_message = await update.message.reply_text(f"🔍 Шукаю пераклад слова '{word_to_translate}' у Skarnik...")
+            
             if skarnik_tr:
                 # Пробуем Skarnik переводчик
                 be = skarnik_tr.translate_ru_to_be(word_to_translate)
                 if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
                     # Удаляем сообщение об ожидании и отправляем перевод
-                    await wait_message.delete()
+                    try:
+                        await wait_message.delete()
+                    except:
+                        pass  # Игнорируем ошибки удаления сообщения
                     await update.message.reply_text(f"'{word_to_translate}' → '{be}'")
                     return
             
@@ -368,12 +373,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 be = "пераклад не знойдзены"
             
             # Удаляем сообщение об ожидании и отправляем перевод
-            await wait_message.delete()
+            try:
+                await wait_message.delete()
+            except:
+                pass  # Игнорируем ошибки удаления сообщения
             await update.message.reply_text(f"'{word_to_translate}' → '{be}'")
             
         except Exception as e:
+            print(f"❌ Ошибка при обработке упоминания: {e}")
             # Удаляем сообщение об ожидании и отправляем ошибку
-            await wait_message.delete()
+            try:
+                await wait_message.delete()
+            except:
+                pass  # Игнорируем ошибки удаления сообщения
             await update.message.reply_text(f"Памылка перакладу: {e}")
     else:
         # Если нет упоминания, переводим весь текст как обычно
