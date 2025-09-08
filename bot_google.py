@@ -219,6 +219,13 @@ def ensure_translator():
 
 def delayed_translation(update: Update, context: CallbackContext, text: str, is_mention: bool = False, word_to_translate: str = ""):
     """Выполняет перевод с задержкой"""
+    chat_id = update.message.chat_id
+    
+    # Очищаем таймер после выполнения
+    with translation_lock:
+        if chat_id in translation_timers:
+            del translation_timers[chat_id]
+    
     try:
         google_tr, fallback_tr = ensure_translator()
         
@@ -266,17 +273,26 @@ def schedule_translation(update: Update, context: CallbackContext, text: str, is
     with translation_lock:
         # Отменяем предыдущий таймер для этого чата
         if chat_id in translation_timers:
+            print(f"🔄 Отменяю предыдущий таймер для чата {chat_id}")
             translation_timers[chat_id].cancel()
+            del translation_timers[chat_id]
         
         # Создаем новый таймер
         timer = threading.Timer(2.0, delayed_translation, args=(update, context, text, is_mention, word_to_translate))
         translation_timers[chat_id] = timer
         timer.start()
         
-        print(f"⏰ Запланирован перевод через 2 секунды для чата {chat_id}")
+        print(f"⏰ Запланирован перевод через 2 секунды для чата {chat_id}: '{text[:50]}...'")
 
 def delayed_inline_translation(update: Update, context: CallbackContext, query: str):
     """Выполняет инлайн-перевод с задержкой"""
+    user_id = update.inline_query.from_user.id
+    
+    # Очищаем таймер после выполнения
+    with inline_lock:
+        if user_id in inline_timers:
+            del inline_timers[user_id]
+    
     try:
         google_tr, fallback_tr = ensure_translator()
         
@@ -329,14 +345,16 @@ def schedule_inline_translation(update: Update, context: CallbackContext, query:
     with inline_lock:
         # Отменяем предыдущий таймер для этого пользователя
         if user_id in inline_timers:
+            print(f"🔄 Отменяю предыдущий таймер для пользователя {user_id}")
             inline_timers[user_id].cancel()
+            del inline_timers[user_id]
         
         # Создаем новый таймер
         timer = threading.Timer(1.0, delayed_inline_translation, args=(update, context, query))
         inline_timers[user_id] = timer
         timer.start()
         
-        print(f"⏰ Запланирован инлайн-перевод через 1 секунду для пользователя {user_id}")
+        print(f"⏰ Запланирован инлайн-перевод через 1 секунду для пользователя {user_id}: '{query}'")
 
 # Команды
 def start(update: Update, context: CallbackContext):
