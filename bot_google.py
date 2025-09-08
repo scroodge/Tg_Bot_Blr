@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import re
-from typing import Optional
+from typing import Optional, Dict
 
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import Updater, CommandHandler, MessageHandler, InlineQueryHandler, Filters, CallbackContext
@@ -192,6 +192,10 @@ translator: Optional[GoogleTranslator] = None
 fallback_translator: Optional[FallbackTranslator] = None
 translator_lock = threading.Lock()
 
+# Таймеры для задержки перевода
+translation_timers: Dict[int, threading.Timer] = {}
+translation_lock = threading.Lock()
+
 def ensure_translator():
     global translator, fallback_translator
     
@@ -209,16 +213,75 @@ def ensure_translator():
     
     return translator, fallback_translator
 
+def delayed_translation(update: Update, context: CallbackContext, text: str, is_mention: bool = False, word_to_translate: str = ""):
+    """Выполняет перевод с задержкой"""
+    try:
+        google_tr, fallback_tr = ensure_translator()
+        
+        if is_mention and word_to_translate:
+            # Перевод одного слова при упоминании
+            print(f"🔍 Обрабатываю упоминание: '{word_to_translate}'")
+            
+            if google_tr:
+                be = google_tr.translate_ru_to_be(word_to_translate)
+                if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
+                    update.message.reply_text(f"'{word_to_translate}' → '{be}'")
+                    return
+            
+            # Если Google не сработал, используем fallback
+            be = fallback_tr.translate_ru_to_be(word_to_translate)
+            if not be or be.startswith("Пераклад не знойдзены"):
+                be = "пераклад не знойдзены"
+            
+            update.message.reply_text(f"'{word_to_translate}' → '{be}'")
+        else:
+            # Перевод всего текста
+            print(f"🔍 Перевожу текст: '{text}'")
+            
+            if google_tr:
+                be = google_tr.translate_ru_to_be(text)
+                if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
+                    update.message.reply_text(be)
+                    return
+            
+            # Если Google не сработал, используем fallback
+            be = fallback_tr.translate_ru_to_be(text)
+            if not be or be.startswith("Пераклад не знойдзены"):
+                be = "Пераклад не атрымаўся. Паспрабуйце іншы тэкст."
+            
+            update.message.reply_text(be)
+            
+    except Exception as e:
+        print(f"❌ Ошибка при переводе: {e}")
+        update.message.reply_text(f"Памылка перакладу: {e}")
+
+def schedule_translation(update: Update, context: CallbackContext, text: str, is_mention: bool = False, word_to_translate: str = ""):
+    """Планирует перевод с задержкой 2 секунды"""
+    chat_id = update.message.chat_id
+    
+    with translation_lock:
+        # Отменяем предыдущий таймер для этого чата
+        if chat_id in translation_timers:
+            translation_timers[chat_id].cancel()
+        
+        # Создаем новый таймер
+        timer = threading.Timer(2.0, delayed_translation, args=(update, context, text, is_mention, word_to_translate))
+        translation_timers[chat_id] = timer
+        timer.start()
+        
+        print(f"⏰ Запланирован перевод через 2 секунды для чата {chat_id}")
+
 # Команды
 def start(update: Update, context: CallbackContext):
     bot_username = context.bot.username
     msg = (
         "Прывітанне! Я перакладаю з рускай на беларускую праз Google Translate 🌐\n\n"
         "📝 Спосабы выкарыстання:\n"
-        "• Напішыце мне тэкст — я адкажу перакладам.\n"
+        "• Напішыце мне тэкст — я адкажу перакладам праз 2 секунды.\n"
         "• У любым чаце ўвядзіце: @"
         f"{bot_username} ваш рускі тэкст — і ўстаўце вынік.\n"
         f"• Для перакладу аднаго слова: Добрае @{bot_username} утро\n\n"
+        "⏰ Пераклад адбываецца праз 2 секунды пасля апошняга ўводу.\n"
         "Крыніца: Google Translate API.\n"
         "У выпадку памылкі выкарыстоўваецца fallback перакладчык.\n\n"
         "Каманды:\n"
@@ -233,12 +296,13 @@ def help_cmd(update: Update, context: CallbackContext):
     update.message.reply_text(
         "📝 Спосабы выкарыстання:\n\n"
         "1️⃣ Пераклад поўнага тэксту:\n"
-        "Напішыце мне рускі тэкст — я адкажу перакладам.\n\n"
+        "Напішыце мне рускі тэкст — я адкажу перакладам праз 2 секунды.\n\n"
         "2️⃣ Інлайн-рэжым:\n"
         f"@{bot_username} ваш рускі тэкст\n\n"
         f"3️⃣ Пераклад аднаго слова:\n"
         f"Добрае @{bot_username} утро\n"
         f"Спасибо @{bot_username} большое\n\n"
+        "⏰ Пераклад адбываецца праз 2 секунды пасля апошняга ўводу.\n"
         "Бот выкарыстоўвае Google Translate API для перакладу.\n"
         "Каманды:\n"
         "/status - статус перакладчыка"
@@ -307,84 +371,16 @@ def on_text(update: Update, context: CallbackContext):
         words = phrase_after_mention.split()
         word_to_translate = words[-1] if words else phrase_after_mention
         
-        print(f"🔍 Обрабатываю упоминание: '{phrase_after_mention}' -> слово: '{word_to_translate}'")
+        print(f"🔍 Планирую перевод слова: '{word_to_translate}' через 2 секунды")
         
-        google_tr, fallback_tr = ensure_translator()
-        
-        try:
-            # Отправляем сообщение о том, что перевод в процессе
-            wait_message = update.message.reply_text(f"🌐 Шукаю пераклад слова '{word_to_translate}' у Google...")
-            
-            if google_tr:
-                # Пробуем Google Translate
-                be = google_tr.translate_ru_to_be(word_to_translate)
-                if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
-                    # Удаляем сообщение об ожидании и отправляем перевод
-                    try:
-                        wait_message.delete()
-                    except:
-                        pass
-                    update.message.reply_text(f"'{word_to_translate}' → '{be}'")
-                    return
-            
-            # Если Google не сработал, используем fallback
-            be = fallback_tr.translate_ru_to_be(word_to_translate)
-            if not be or be.startswith("Пераклад не знойдзены"):
-                be = "пераклад не знойдзены"
-            
-            # Удаляем сообщение об ожидании и отправляем перевод
-            try:
-                wait_message.delete()
-            except:
-                pass
-            update.message.reply_text(f"'{word_to_translate}' → '{be}'")
-            
-        except Exception as e:
-            print(f"❌ Ошибка при обработке упоминания: {e}")
-            try:
-                wait_message.delete()
-            except:
-                pass
-            update.message.reply_text(f"Памылка перакладу: {e}")
+        # Планируем перевод с задержкой
+        schedule_translation(update, context, text, is_mention=True, word_to_translate=word_to_translate)
     else:
-        # Если нет упоминания, переводим весь текст как обычно
-        google_tr, fallback_tr = ensure_translator()
+        # Если нет упоминания, переводим весь текст с задержкой
+        print(f"🔍 Планирую перевод текста: '{text}' через 2 секунды")
         
-        # Отправляем сообщение о том, что перевод в процессе
-        wait_message = update.message.reply_text("🌐 Шукаю пераклад у Google...")
-        
-        try:
-            if google_tr:
-                # Пробуем Google Translate
-                be = google_tr.translate_ru_to_be(text)
-                if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
-                    # Удаляем сообщение об ожидании и отправляем перевод
-                    try:
-                        wait_message.delete()
-                    except:
-                        pass
-                    update.message.reply_text(be)
-                    return
-            
-            # Если Google не сработал, используем fallback
-            be = fallback_tr.translate_ru_to_be(text)
-            if not be or be.startswith("Пераклад не знойдзены"):
-                be = "Пераклад не атрымаўся. Паспрабуйце іншы тэкст."
-            
-            # Удаляем сообщение об ожидании и отправляем перевод
-            try:
-                wait_message.delete()
-            except:
-                pass
-            update.message.reply_text(be)
-            
-        except Exception as e:
-            # Удаляем сообщение об ожидании и отправляем ошибку
-            try:
-                wait_message.delete()
-            except:
-                pass
-            update.message.reply_text(f"Памылка перакладу: {e}")
+        # Планируем перевод с задержкой
+        schedule_translation(update, context, text, is_mention=False)
 
 # Инлайн-режим
 def on_inline_query(update: Update, context: CallbackContext):
