@@ -403,14 +403,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if skarnik_tr:
                 # Пробуем Skarnik переводчик
                 be = skarnik_tr.translate_ru_to_be(word_to_translate)
+                print(f"🔍 Результат Skarnik: '{be}'")
                 if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
                     # Удаляем сообщение об ожидании и отправляем перевод
                     try:
                         await wait_message.delete()
                     except:
                         pass  # Игнорируем ошибки удаления сообщения
+                    print(f"✅ Отправляю перевод: '{word_to_translate}' → '{be}'")
                     await update.message.reply_text(f"'{word_to_translate}' → '{be}'")
                     return
+                else:
+                    print(f"❌ Skarnik не нашел перевод или ошибка: '{be}'")
             
             # Если Skarnik не сработал, используем fallback
             be = fallback_tr.translate_ru_to_be(word_to_translate)
@@ -528,6 +532,9 @@ def main():
     
     # Настройка с retry и обработкой ошибок
     app = Application.builder().token(token).build()
+    
+    print(f"🔧 Токен: {token[:10]}...")
+    print(f"🔧 Приложение создано")
     
     # Добавляем обработчик ошибок
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
