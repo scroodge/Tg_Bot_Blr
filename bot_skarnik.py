@@ -344,9 +344,20 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"🔍 Паттерн: {mention_pattern}")
     print(f"🔍 Найдено совпадение: {mention_match is not None}")
     
-    if mention_match:
+    # Также проверяем, есть ли упоминание без @ (для личных чатов)
+    simple_mention_pattern = f"{bot_username}\\s+(.+)"
+    simple_mention_match = re.search(simple_mention_pattern, text, re.IGNORECASE)
+    
+    print(f"🔍 Простой паттерн: {simple_mention_pattern}")
+    print(f"🔍 Найдено простое совпадение: {simple_mention_match is not None}")
+    
+    if mention_match or simple_mention_match:
         # Если есть упоминание, переводим только последнее слово из фразы
-        phrase_after_mention = mention_match.group(1).strip()
+        if mention_match:
+            phrase_after_mention = mention_match.group(1).strip()
+        else:
+            phrase_after_mention = simple_mention_match.group(1).strip()
+        
         # Берем только последнее слово
         words = phrase_after_mention.split()
         word_to_translate = words[-1] if words else phrase_after_mention
