@@ -334,30 +334,58 @@ async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     bot_username = (await context.bot.get_me()).username
-    
-    # Проверяем, есть ли упоминание бота в тексте
-    mention_pattern = f"@{bot_username}\\s+(.+)"
-    import re
-    mention_match = re.search(mention_pattern, text, re.IGNORECASE)
+    bot_id = (await context.bot.get_me()).id
     
     print(f"🔍 Проверяю текст: '{text}'")
-    print(f"🔍 Паттерн: {mention_pattern}")
-    print(f"🔍 Найдено совпадение: {mention_match is not None}")
+    print(f"🔍 Username бота: {bot_username}")
+    print(f"🔍 ID бота: {bot_id}")
     
-    # Также проверяем, есть ли упоминание без @ (для личных чатов)
-    simple_mention_pattern = f"{bot_username}\\s+(.+)"
-    simple_mention_match = re.search(simple_mention_pattern, text, re.IGNORECASE)
+    # Проверяем, есть ли упоминание бота через entities (для групп)
+    is_mentioned = False
+    phrase_after_mention = ""
     
-    print(f"🔍 Простой паттерн: {simple_mention_pattern}")
-    print(f"🔍 Найдено простое совпадение: {simple_mention_match is not None}")
+    if update.message.entities:
+        for entity in update.message.entities:
+            if entity.type == "mention":
+                # Извлекаем текст упоминания
+                mention_text = text[entity.offset:entity.offset + entity.length]
+                print(f"🔍 Найдено упоминание: '{mention_text}'")
+                
+                if f"@{bot_username}" in mention_text.lower():
+                    # Находим текст после упоминания
+                    text_after_mention = text[entity.offset + entity.length:].strip()
+                    if text_after_mention:
+                        phrase_after_mention = text_after_mention
+                        is_mentioned = True
+                        print(f"🔍 Текст после упоминания: '{phrase_after_mention}'")
+                        break
     
-    if mention_match or simple_mention_match:
-        # Если есть упоминание, переводим только последнее слово из фразы
+    # Если не нашли через entities, проверяем через регулярные выражения
+    if not is_mentioned:
+        # Проверяем, есть ли упоминание бота в тексте
+        mention_pattern = f"@{bot_username}\\s+(.+)"
+        import re
+        mention_match = re.search(mention_pattern, text, re.IGNORECASE)
+        
+        print(f"🔍 Паттерн с @: {mention_pattern}")
+        print(f"🔍 Найдено совпадение с @: {mention_match is not None}")
+        
+        # Также проверяем, есть ли упоминание без @ (для личных чатов)
+        simple_mention_pattern = f"{bot_username}\\s+(.+)"
+        simple_mention_match = re.search(simple_mention_pattern, text, re.IGNORECASE)
+        
+        print(f"🔍 Простой паттерн: {simple_mention_pattern}")
+        print(f"🔍 Найдено простое совпадение: {simple_mention_match is not None}")
+        
         if mention_match:
             phrase_after_mention = mention_match.group(1).strip()
-        else:
+            is_mentioned = True
+        elif simple_mention_match:
             phrase_after_mention = simple_mention_match.group(1).strip()
-        
+            is_mentioned = True
+    
+    if is_mentioned:
+        # Если есть упоминание, переводим только последнее слово из фразы
         # Берем только последнее слово
         words = phrase_after_mention.split()
         word_to_translate = words[-1] if words else phrase_after_mention
