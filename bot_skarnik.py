@@ -129,6 +129,10 @@ class SkarnikTranslator:
     def _parse_skarnik_response(self, html_content: str, original_text: str) -> str:
         """Парсит HTML ответ от Skarnik и извлекает перевод"""
         try:
+            print(f"🔍 Парсинг HTML для: '{original_text}'")
+            print(f"🔍 HTML длина: {len(html_content)} символов")
+            print(f"🔍 HTML начало: {html_content[:200]}...")
+            
             # Ищем перевод в HTML
             # Основной перевод находится в элементе с id="trn"
             
@@ -137,15 +141,20 @@ class SkarnikTranslator:
             match = re.search(trn_pattern, html_content, re.DOTALL)
             if match:
                 trn_content = match.group(1)
+                print(f"🔍 Найден trn элемент: {trn_content[:100]}...")
                 # Извлекаем основной перевод (первое слово после "перевод на белорусский язык:")
                 main_translation = re.search(r'<font size="\+2" color="831b03">([^<]+)</font>', trn_content)
                 if main_translation:
-                    return main_translation.group(1).strip()
+                    result = main_translation.group(1).strip()
+                    print(f"✅ Найден основной перевод: '{result}'")
+                    return result
                 
                 # Альтернативно: ищем первое белорусское слово
                 belarusian_word = re.search(r'<font color="5f5f5f"><strong>[^<]+</strong> — ([^<]+)</font>', trn_content)
                 if belarusian_word:
-                    return belarusian_word.group(1).strip()
+                    result = belarusian_word.group(1).strip()
+                    print(f"✅ Найдено белорусское слово: '{result}'")
+                    return result
             
             # Вариант 2: Ищем перевод в заголовке h1
             h1_pattern = r'<h1><span id="src">[^<]+</span></h1>\s*<p>перевод на белорусский язык:</p>\s*<p id="trn">(.*?)</p>'
