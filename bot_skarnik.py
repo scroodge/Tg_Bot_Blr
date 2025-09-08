@@ -470,7 +470,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Инлайн-режим: @BotName <русский текст>
 async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = (update.inline_query.query or "").strip()
+    print(f"🔍 ИНЛАЙН ЗАПРОС: '{query}'")
+    
     if not query:
+        print("🔍 Пустой инлайн запрос, показываю подсказку")
         # Покажем подсказку-пустышку, чтобы было что выбрать
         results = [
             InlineQueryResultArticle(
@@ -484,12 +487,15 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     skarnik_tr, fallback_tr = await ensure_translator()
+    print(f"🔍 Переводчик инициализирован: {skarnik_tr is not None}")
     
     try:
         if skarnik_tr:
             # Пробуем Skarnik переводчик
             be = skarnik_tr.translate_ru_to_be(query)
+            print(f"🔍 Результат Skarnik для инлайн: '{be}'")
             if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
+                print(f"✅ Отправляю инлайн результат: '{query}' → '{be}'")
                 results = [
                     InlineQueryResultArticle(
                         id=str(uuid4()),
@@ -500,6 +506,8 @@ async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
                 await update.inline_query.answer(results, cache_time=0, is_personal=True)
                 return
+            else:
+                print(f"❌ Skarnik не нашел перевод для инлайн: '{be}'")
         
         # Если Skarnik не сработал, используем fallback
         be = fallback_tr.translate_ru_to_be(query)
