@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+бота добавить #!/usr/bin/env python3
 """
 Telegram бот для перевода с русского на белорусский через Google Translate API
 Совместим с python-telegram-bot==13.15
@@ -9,9 +9,9 @@ import sys
 import threading
 import time
 import re
-import json
+import sqlite3
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import Updater, CommandHandler, MessageHandler, InlineQueryHandler, Filters, CallbackContext
@@ -202,108 +202,280 @@ translation_lock = threading.Lock()
 inline_timers: Dict[str, threading.Timer] = {}
 inline_lock = threading.Lock()
 
-# Система логирования пользователей
-user_stats: Dict[int, Dict] = {}
-stats_lock = threading.Lock()
-STATS_FILE = "user_stats.json"
+# Система базы данных SQLite
+DB_FILE = "bot_stats.db"
+db_lock = threading.Lock()
 
-def load_user_stats():
-    """Загружает статистику пользователей из файла"""
-    global user_stats
+def init_database():
+    """Инициализирует базу данных"""
     try:
-        if os.path.exists(STATS_FILE):
-            with open(STATS_FILE, 'r', encoding='utf-8') as f:
-                user_stats = json.load(f)
-            print(f"📊 Загружена статистика для {len(user_stats)} пользователей")
-        else:
-            user_stats = {}
-            print("📊 Статистика пользователей инициализирована")
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            # Таблица пользователей
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    total_requests INTEGER DEFAULT 0,
+                    inline_requests INTEGER DEFAULT 0,
+                    message_requests INTEGER DEFAULT 0,
+                    mention_requests INTEGER DEFAULT 0,
+                    first_seen TEXT,
+                    last_activity TEXT
+                )
+            ''')
+            
+            # Таблица запросов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    request_type TEXT,
+                    text TEXT,
+                    text_length INTEGER,
+                    timestamp TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            ''')
+            
+            # Таблица админов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admins (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    added_date TEXT
+                )
+            ''')
+            
+            conn.commit()
+            print("✅ База данных инициализирована")
+            
     except Exception as e:
-        print(f"❌ Ошибка загрузки статистики: {e}")
-        user_stats = {}
-
-def save_user_stats():
-    """Сохраняет статистику пользователей в файл"""
-    try:
-        with open(STATS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(user_stats, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"❌ Ошибка сохранения статистики: {e}")
+        print(f"❌ Ошибка инициализации БД: {e}")
 
 def log_user_request(user_id: int, username: str, first_name: str, last_name: str, request_type: str, text: str = ""):
-    """Логирует запрос пользователя"""
-    with stats_lock:
-        if user_id not in user_stats:
-            user_stats[user_id] = {
-                "username": username,
-                "first_name": first_name,
-                "last_name": last_name,
-                "total_requests": 0,
-                "inline_requests": 0,
-                "message_requests": 0,
-                "mention_requests": 0,
-                "last_activity": "",
-                "first_seen": datetime.now().isoformat(),
-                "requests_history": []
-            }
-        
-        # Обновляем информацию о пользователе
-        user_stats[user_id]["username"] = username or user_stats[user_id]["username"]
-        user_stats[user_id]["first_name"] = first_name or user_stats[user_id]["first_name"]
-        user_stats[user_id]["last_name"] = last_name or user_stats[user_id]["last_name"]
-        user_stats[user_id]["total_requests"] += 1
-        user_stats[user_id]["last_activity"] = datetime.now().isoformat()
-        
-        # Увеличиваем счетчик по типу запроса
-        if request_type == "inline":
-            user_stats[user_id]["inline_requests"] += 1
-        elif request_type == "message":
-            user_stats[user_id]["message_requests"] += 1
-        elif request_type == "mention":
-            user_stats[user_id]["mention_requests"] += 1
-        
-        # Добавляем в историю (последние 50 запросов)
-        request_record = {
-            "timestamp": datetime.now().isoformat(),
-            "type": request_type,
-            "text": text[:100] if text else "",  # Ограничиваем длину
-            "length": len(text) if text else 0
-        }
-        user_stats[user_id]["requests_history"].append(request_record)
-        
-        # Ограничиваем историю последними 50 запросами
-        if len(user_stats[user_id]["requests_history"]) > 50:
-            user_stats[user_id]["requests_history"] = user_stats[user_id]["requests_history"][-50:]
-        
-        # Сохраняем статистику каждые 10 запросов
-        if user_stats[user_id]["total_requests"] % 10 == 0:
-            save_user_stats()
-        
-        # Логируем в консоль
-        print(f"📊 Пользователь {user_id} ({username or first_name}): {request_type} запрос #{user_stats[user_id]['total_requests']}")
+    """Логирует запрос пользователя в БД"""
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            now = datetime.now().isoformat()
+            
+            # Проверяем, есть ли пользователь
+            cursor.execute("SELECT total_requests FROM users WHERE user_id = ?", (user_id,))
+            user_exists = cursor.fetchone()
+            
+            if user_exists:
+                # Обновляем существующего пользователя
+                cursor.execute('''
+                    UPDATE users SET 
+                        username = COALESCE(?, username),
+                        first_name = COALESCE(?, first_name),
+                        last_name = COALESCE(?, last_name),
+                        total_requests = total_requests + 1,
+                        last_activity = ?,
+                        inline_requests = inline_requests + ?,
+                        message_requests = message_requests + ?,
+                        mention_requests = mention_requests + ?
+                    WHERE user_id = ?
+                ''', (
+                    username, first_name, last_name, now,
+                    1 if request_type == "inline" else 0,
+                    1 if request_type == "message" else 0,
+                    1 if request_type == "mention" else 0,
+                    user_id
+                ))
+            else:
+                # Создаем нового пользователя
+                cursor.execute('''
+                    INSERT INTO users (user_id, username, first_name, last_name, total_requests, 
+                                    inline_requests, message_requests, mention_requests, first_seen, last_activity)
+                    VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                ''', (
+                    user_id, username, first_name, last_name,
+                    1 if request_type == "inline" else 0,
+                    1 if request_type == "message" else 0,
+                    1 if request_type == "mention" else 0,
+                    now, now
+                ))
+            
+            # Добавляем запрос в историю
+            cursor.execute('''
+                INSERT INTO requests (user_id, request_type, text, text_length, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (user_id, request_type, text[:500], len(text), now))
+            
+            conn.commit()
+            
+            # Получаем общее количество запросов пользователя
+            cursor.execute("SELECT total_requests FROM users WHERE user_id = ?", (user_id,))
+            total_requests = cursor.fetchone()[0]
+            
+            print(f"📊 Пользователь {user_id} ({username or first_name}): {request_type} запрос #{total_requests}")
+            
+    except Exception as e:
+        print(f"❌ Ошибка записи в БД: {e}")
 
 def get_user_stats_summary():
     """Возвращает сводку статистики пользователей"""
-    with stats_lock:
-        if not user_stats:
-            return "📊 Статистика пуста"
-        
-        total_users = len(user_stats)
-        total_requests = sum(stats["total_requests"] for stats in user_stats.values())
-        
-        # Топ-5 пользователей по количеству запросов
-        top_users = sorted(user_stats.items(), key=lambda x: x[1]["total_requests"], reverse=True)[:5]
-        
-        summary = f"📊 **Статистика пользователей**\n\n"
-        summary += f"👥 Всего пользователей: {total_users}\n"
-        summary += f"📝 Всего запросов: {total_requests}\n\n"
-        summary += f"🏆 **Топ-5 пользователей:**\n"
-        
-        for i, (user_id, stats) in enumerate(top_users, 1):
-            name = stats["username"] or stats["first_name"] or f"ID:{user_id}"
-            summary += f"{i}. {name}: {stats['total_requests']} запросов\n"
-        
-        return summary
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            # Общая статистика
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT SUM(total_requests) FROM users")
+            total_requests = cursor.fetchone()[0] or 0
+            
+            # Топ-5 пользователей
+            cursor.execute('''
+                SELECT user_id, username, first_name, total_requests 
+                FROM users 
+                ORDER BY total_requests DESC 
+                LIMIT 5
+            ''')
+            top_users = cursor.fetchall()
+            
+            summary = f"📊 **Статистика пользователей**\n\n"
+            summary += f"👥 Всего пользователей: {total_users}\n"
+            summary += f"📝 Всего запросов: {total_requests}\n\n"
+            summary += f"🏆 **Топ-5 пользователей:**\n"
+            
+            for i, (user_id, username, first_name, requests) in enumerate(top_users, 1):
+                name = username or first_name or f"ID:{user_id}"
+                summary += f"{i}. {name}: {requests} запросов\n"
+            
+            return summary
+            
+    except Exception as e:
+        return f"❌ Ошибка получения статистики: {e}"
+
+def get_user_personal_stats(user_id: int):
+    """Возвращает личную статистику пользователя"""
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT username, first_name, last_name, total_requests, 
+                       inline_requests, message_requests, mention_requests, 
+                       first_seen, last_activity
+                FROM users WHERE user_id = ?
+            ''', (user_id,))
+            
+            user_data = cursor.fetchone()
+            if not user_data:
+                return None
+                
+            username, first_name, last_name, total_requests, inline_requests, message_requests, mention_requests, first_seen, last_activity = user_data
+            
+            # Последние 5 запросов
+            cursor.execute('''
+                SELECT request_type, text, timestamp 
+                FROM requests 
+                WHERE user_id = ? 
+                ORDER BY timestamp DESC 
+                LIMIT 5
+            ''', (user_id,))
+            recent_requests = cursor.fetchall()
+            
+            return {
+                'username': username,
+                'first_name': first_name,
+                'last_name': last_name,
+                'total_requests': total_requests,
+                'inline_requests': inline_requests,
+                'message_requests': message_requests,
+                'mention_requests': mention_requests,
+                'first_seen': first_seen,
+                'last_activity': last_activity,
+                'recent_requests': recent_requests
+            }
+            
+    except Exception as e:
+        print(f"❌ Ошибка получения личной статистики: {e}")
+        return None
+
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь админом"""
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,))
+            return cursor.fetchone() is not None
+    except Exception as e:
+        print(f"❌ Ошибка проверки админа: {e}")
+        return False
+
+def add_admin(user_id: int, username: str = None):
+    """Добавляет админа"""
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO admins (user_id, username, added_date)
+                VALUES (?, ?, ?)
+            ''', (user_id, username, datetime.now().isoformat()))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"❌ Ошибка добавления админа: {e}")
+        return False
+
+def get_detailed_stats():
+    """Возвращает детальную статистику для админов"""
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            # Общая статистика
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT SUM(total_requests) FROM users")
+            total_requests = cursor.fetchone()[0] or 0
+            
+            # Статистика по типам запросов
+            cursor.execute("SELECT SUM(inline_requests) FROM users")
+            total_inline = cursor.fetchone()[0] or 0
+            
+            cursor.execute("SELECT SUM(message_requests) FROM users")
+            total_messages = cursor.fetchone()[0] or 0
+            
+            cursor.execute("SELECT SUM(mention_requests) FROM users")
+            total_mentions = cursor.fetchone()[0] or 0
+            
+            # Активность за последние 24 часа
+            yesterday = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            cursor.execute("SELECT COUNT(*) FROM requests WHERE timestamp > ?", (yesterday,))
+            requests_today = cursor.fetchone()[0]
+            
+            # Топ-10 пользователей
+            cursor.execute('''
+                SELECT user_id, username, first_name, total_requests, last_activity
+                FROM users 
+                ORDER BY total_requests DESC 
+                LIMIT 10
+            ''')
+            top_users = cursor.fetchall()
+            
+            return {
+                'total_users': total_users,
+                'total_requests': total_requests,
+                'total_inline': total_inline,
+                'total_messages': total_messages,
+                'total_mentions': total_mentions,
+                'requests_today': requests_today,
+                'top_users': top_users
+            }
+            
+    except Exception as e:
+        print(f"❌ Ошибка получения детальной статистики: {e}")
+        return None
 
 def ensure_translator():
     global translator, fallback_translator
@@ -479,7 +651,11 @@ def start(update: Update, context: CallbackContext):
         "/help - дапамога\n"
         "/status - статус перакладчыка\n"
         "/stats - статистика всех пользователей\n"
-        "/mystats - ваша статистика"
+        "/mystats - ваша статистика\n\n"
+        "Админ-команды:\n"
+        "/adminstats - детальная статистика\n"
+        "/addadmin <id> - добавить админа\n"
+        "/export - экспорт в CSV"
     )
     update.message.reply_text(msg)
 
@@ -499,7 +675,11 @@ def help_cmd(update: Update, context: CallbackContext):
         "Каманды:\n"
         "/status - статус перакладчыка\n"
         "/stats - статистика всех пользователей\n"
-        "/mystats - ваша статистика"
+        "/mystats - ваша статистика\n\n"
+        "Админ-команды:\n"
+        "/adminstats - детальная статистика\n"
+        "/addadmin <id> - добавить админа\n"
+        "/export - экспорт в CSV"
     )
 
 def status_cmd(update: Update, context: CallbackContext):
@@ -528,29 +708,115 @@ def my_stats_cmd(update: Update, context: CallbackContext):
     first_name = update.message.from_user.first_name
     last_name = update.message.from_user.last_name
     
-    with stats_lock:
-        if user_id not in user_stats:
-            update.message.reply_text("📊 У вас пока нет статистики. Сделайте несколько запросов!")
-            return
-        
-        stats = user_stats[user_id]
-        msg = f"📊 **Ваша статистика**\n\n"
-        msg += f"👤 Имя: {first_name} {last_name or ''}\n"
-        msg += f"🆔 Username: @{username or 'не указан'}\n"
-        msg += f"📝 Всего запросов: {stats['total_requests']}\n"
-        msg += f"  • Обычные сообщения: {stats['message_requests']}\n"
-        msg += f"  • Инлайн-запросы: {stats['inline_requests']}\n"
-        msg += f"  • Упоминания: {stats['mention_requests']}\n"
-        msg += f"🕐 Первое использование: {stats['first_seen'][:19]}\n"
-        msg += f"🕐 Последняя активность: {stats['last_activity'][:19]}\n"
-        
-        # Последние 5 запросов
-        if stats['requests_history']:
-            msg += f"\n📋 **Последние запросы:**\n"
-            for req in stats['requests_history'][-5:]:
-                msg += f"• {req['type']}: {req['text'][:30]}{'...' if len(req['text']) > 30 else ''}\n"
+    stats = get_user_personal_stats(user_id)
+    if not stats:
+        update.message.reply_text("📊 У вас пока нет статистики. Сделайте несколько запросов!")
+        return
+    
+    msg = f"📊 **Ваша статистика**\n\n"
+    msg += f"👤 Имя: {first_name} {last_name or ''}\n"
+    msg += f"🆔 Username: @{username or 'не указан'}\n"
+    msg += f"📝 Всего запросов: {stats['total_requests']}\n"
+    msg += f"  • Обычные сообщения: {stats['message_requests']}\n"
+    msg += f"  • Инлайн-запросы: {stats['inline_requests']}\n"
+    msg += f"  • Упоминания: {stats['mention_requests']}\n"
+    msg += f"🕐 Первое использование: {stats['first_seen'][:19]}\n"
+    msg += f"🕐 Последняя активность: {stats['last_activity'][:19]}\n"
+    
+    # Последние 5 запросов
+    if stats['recent_requests']:
+        msg += f"\n📋 **Последние запросы:**\n"
+        for req_type, req_text, req_time in stats['recent_requests']:
+            msg += f"• {req_type}: {req_text[:30]}{'...' if len(req_text) > 30 else ''}\n"
     
     update.message.reply_text(msg, parse_mode='Markdown')
+
+def admin_stats_cmd(update: Update, context: CallbackContext):
+    """Детальная статистика для админов"""
+    user_id = update.message.from_user.id
+    
+    if not is_admin(user_id):
+        update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    stats = get_detailed_stats()
+    if not stats:
+        update.message.reply_text("❌ Ошибка получения статистики")
+        return
+    
+    msg = f"📊 **Детальная статистика (Админ)**\n\n"
+    msg += f"👥 Всего пользователей: {stats['total_users']}\n"
+    msg += f"📝 Всего запросов: {stats['total_requests']}\n"
+    msg += f"📅 Запросов сегодня: {stats['requests_today']}\n\n"
+    msg += f"📈 **По типам запросов:**\n"
+    msg += f"• Обычные сообщения: {stats['total_messages']}\n"
+    msg += f"• Инлайн-запросы: {stats['total_inline']}\n"
+    msg += f"• Упоминания: {stats['total_mentions']}\n\n"
+    msg += f"🏆 **Топ-10 пользователей:**\n"
+    
+    for i, (uid, username, first_name, requests, last_activity) in enumerate(stats['top_users'], 1):
+        name = username or first_name or f"ID:{uid}"
+        last_seen = last_activity[:16] if last_activity else "неизвестно"
+        msg += f"{i}. {name}: {requests} запросов (последняя активность: {last_seen})\n"
+    
+    update.message.reply_text(msg, parse_mode='Markdown')
+
+def add_admin_cmd(update: Update, context: CallbackContext):
+    """Добавляет админа"""
+    user_id = update.message.from_user.id
+    
+    if not is_admin(user_id):
+        update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    if not context.args:
+        update.message.reply_text("❌ Укажите ID пользователя: /addadmin <user_id>")
+        return
+    
+    try:
+        new_admin_id = int(context.args[0])
+        username = update.message.from_user.username
+        
+        if add_admin(new_admin_id, username):
+            update.message.reply_text(f"✅ Пользователь {new_admin_id} добавлен в админы")
+        else:
+            update.message.reply_text("❌ Ошибка добавления админа")
+    except ValueError:
+        update.message.reply_text("❌ Неверный формат ID пользователя")
+
+def export_stats_cmd(update: Update, context: CallbackContext):
+    """Экспортирует статистику в CSV"""
+    user_id = update.message.from_user.id
+    
+    if not is_admin(user_id):
+        update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            # Экспорт пользователей
+            cursor.execute('''
+                SELECT user_id, username, first_name, last_name, total_requests, 
+                       inline_requests, message_requests, mention_requests, 
+                       first_seen, last_activity
+                FROM users ORDER BY total_requests DESC
+            ''')
+            users_data = cursor.fetchall()
+            
+            csv_content = "user_id,username,first_name,last_name,total_requests,inline_requests,message_requests,mention_requests,first_seen,last_activity\n"
+            for row in users_data:
+                csv_content += ",".join(str(x) if x is not None else "" for x in row) + "\n"
+            
+            # Сохраняем в файл
+            with open("users_export.csv", "w", encoding="utf-8") as f:
+                f.write(csv_content)
+            
+            update.message.reply_text("✅ Статистика экспортирована в users_export.csv")
+            
+    except Exception as e:
+        update.message.reply_text(f"❌ Ошибка экспорта: {e}")
 
 # Перевод обычных сообщений
 def on_text(update: Update, context: CallbackContext):
@@ -672,8 +938,11 @@ def main():
     print(f"🔧 Токен: {token[:10]}...")
     print(f"🔧 Updater создан")
     
-    # Загружаем статистику пользователей
-    load_user_stats()
+    # Инициализируем базу данных
+    init_database()
+    
+    # Добавляем первого админа (владельца бота) - нужно указать ваш user_id
+    # add_admin(user_id=YOUR_USER_ID, username="bot_owner")
     
     # Добавляем обработчики
     dispatcher.add_handler(CommandHandler("start", start))
@@ -681,6 +950,9 @@ def main():
     dispatcher.add_handler(CommandHandler("status", status_cmd))
     dispatcher.add_handler(CommandHandler("stats", stats_cmd))
     dispatcher.add_handler(CommandHandler("mystats", my_stats_cmd))
+    dispatcher.add_handler(CommandHandler("adminstats", admin_stats_cmd))
+    dispatcher.add_handler(CommandHandler("addadmin", add_admin_cmd))
+    dispatcher.add_handler(CommandHandler("export", export_stats_cmd))
     dispatcher.add_handler(InlineQueryHandler(on_inline_query))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, on_text))
     
