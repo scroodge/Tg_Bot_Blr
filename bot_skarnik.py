@@ -336,9 +336,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_username = (await context.bot.get_me()).username
     bot_id = (await context.bot.get_me()).id
     
-    print(f"🔍 Проверяю текст: '{text}'")
+    print(f"📨 ПОЛУЧЕНО СООБЩЕНИЕ: '{text}'")
     print(f"🔍 Username бота: {bot_username}")
     print(f"🔍 ID бота: {bot_id}")
+    print(f"🔍 Chat ID: {update.message.chat_id}")
+    print(f"🔍 Chat type: {update.message.chat.type}")
     
     # Проверяем, есть ли упоминание бота через entities (для групп)
     is_mentioned = False
