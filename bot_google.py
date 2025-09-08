@@ -10,6 +10,7 @@ import threading
 import time
 import re
 import sqlite3
+import argparse
 from datetime import datetime
 from typing import Optional, Dict, List
 
@@ -20,10 +21,18 @@ from uuid import uuid4
 # Google Translate API
 try:
     from googletrans import Translator
-    GOOGLE_AVAILABLE = True
+    GOOGLE_LIBRARY_AVAILABLE = True
 except ImportError:
-    GOOGLE_AVAILABLE = False
+    GOOGLE_LIBRARY_AVAILABLE = False
     print("❌ googletrans не установлен. Установите: pip install googletrans==4.0.0rc1")
+
+# Google Cloud Translate API
+try:
+    from google.cloud import translate_v2 as translate
+    GOOGLE_API_AVAILABLE = True
+except ImportError:
+    GOOGLE_API_AVAILABLE = False
+    print("❌ google-cloud-translate не установлен. Установите: pip install google-cloud-translate")
 
 ENV_PATH = ".env"
 
@@ -53,6 +62,24 @@ def load_or_ask_token() -> str:
         f.write(f"TELEGRAM_BOT_TOKEN={token}\n")
     os.environ["TELEGRAM_BOT_TOKEN"] = token
     return token
+
+def load_google_api_key() -> Optional[str]:
+    """Загружает Google API ключ из .env файла"""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if api_key:
+        return api_key.strip()
+
+    # Попытка прочитать из .env
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("GOOGLE_API_KEY="):
+                    api_key = line.split("=", 1)[1].strip()
+                    if api_key:
+                        os.environ["GOOGLE_API_KEY"] = api_key
+                        return api_key
+    
+    return None
 
 def load_admins_from_env() -> List[int]:
     """Загружает список админов из .env файла"""
@@ -87,14 +114,14 @@ def load_admins_from_env() -> List[int]:
     print("📋 Админы не настроены. Добавьте ADMIN_USER_IDS в .env файл")
     return admins
 
-# Переводчик через Google Translate API
-class GoogleTranslator:
+# Переводчик через Google Translate Library (googletrans)
+class GoogleLibraryTranslator:
     def __init__(self):
-        if not GOOGLE_AVAILABLE:
+        if not GOOGLE_LIBRARY_AVAILABLE:
             raise ImportError("googletrans не установлен")
         
         self.translator = Translator()
-        print("✅ Google Translate переводчик инициализирован")
+        print("✅ Google Translate Library переводчик инициализирован")
 
     def translate_ru_to_be(self, text: str, max_len: int = 512) -> str:
         text = text.strip()
@@ -102,21 +129,55 @@ class GoogleTranslator:
             return ""
         
         try:
-            print(f"🔍 Перевожу через Google: '{text}'")
+            print(f"🔍 Перевожу через Google Library: '{text}'")
             
-            # Google Translate API
+            # Google Translate Library
             result = self.translator.translate(text, src='ru', dest='be')
             
             if result and result.text:
                 translation = result.text.strip()
-                print(f"✅ Google перевод: '{text}' → '{translation}'")
+                print(f"✅ Google Library перевод: '{text}' → '{translation}'")
                 return translation
             else:
-                print(f"❌ Google не вернул перевод для: '{text}'")
+                print(f"❌ Google Library не вернул перевод для: '{text}'")
                 return f"Пераклад не знойдзены для: {text}"
                 
         except Exception as e:
-            print(f"❌ Ошибка Google Translate: {e}")
+            print(f"❌ Ошибка Google Library: {e}")
+            return f"Памылка перакладу: {e}"
+
+# Переводчик через Google Cloud Translate API
+class GoogleAPITranslator:
+    def __init__(self, api_key: str):
+        if not GOOGLE_API_AVAILABLE:
+            raise ImportError("google-cloud-translate не установлен")
+        
+        # Устанавливаем API ключ
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = api_key
+        self.client = translate.Client()
+        print("✅ Google Cloud Translate API переводчик инициализирован")
+
+    def translate_ru_to_be(self, text: str, max_len: int = 512) -> str:
+        text = text.strip()
+        if not text:
+            return ""
+        
+        try:
+            print(f"🔍 Перевожу через Google API: '{text}'")
+            
+            # Google Cloud Translate API
+            result = self.client.translate(text, source_language='ru', target_language='be')
+            
+            if result and 'translatedText' in result:
+                translation = result['translatedText'].strip()
+                print(f"✅ Google API перевод: '{text}' → '{translation}'")
+                return translation
+            else:
+                print(f"❌ Google API не вернул перевод для: '{text}'")
+                return f"Пераклад не знойдзены для: {text}"
+                
+        except Exception as e:
+            print(f"❌ Ошибка Google API: {e}")
             return f"Памылка перакладу: {e}"
 
 # Fallback переводчик с базовым словарем
@@ -223,9 +284,11 @@ class FallbackTranslator:
         
         return "Пераклад не знойдзены ў базе. Паспрабуйце іншы тэкст."
 
-translator: Optional[GoogleTranslator] = None
+# Глобальные переменные для переводчиков
+translator = None
 fallback_translator: Optional[FallbackTranslator] = None
 translator_lock = threading.Lock()
+use_google_api = False  # Флаг для выбора между API и библиотекой
 
 # Таймеры для задержки перевода
 translation_timers: Dict[int, threading.Timer] = {}
@@ -511,16 +574,40 @@ def get_detailed_stats():
         return None
 
 def ensure_translator():
-    global translator, fallback_translator
+    global translator, fallback_translator, use_google_api
     
     if translator is None:
         with translator_lock:
             if translator is None:
                 try:
-                    translator = GoogleTranslator()
+                    if use_google_api:
+                        # Используем Google Cloud Translate API
+                        api_key = load_google_api_key()
+                        if not api_key:
+                            print("❌ Google API ключ не найден в .env файле")
+                            print("💡 Добавьте GOOGLE_API_KEY=your_api_key в .env файл")
+                            raise ValueError("Google API ключ не найден")
+                        
+                        if not GOOGLE_API_AVAILABLE:
+                            print("❌ Google Cloud Translate API не установлен")
+                            print("💡 Установите: pip install google-cloud-translate")
+                            raise ImportError("google-cloud-translate не установлен")
+                        
+                        translator = GoogleAPITranslator(api_key)
+                        print("🌐 Использую Google Cloud Translate API")
+                    else:
+                        # Используем Google Translate Library
+                        if not GOOGLE_LIBRARY_AVAILABLE:
+                            print("❌ Google Translate Library не установлен")
+                            print("💡 Установите: pip install googletrans==4.0.0rc1")
+                            raise ImportError("googletrans не установлен")
+                        
+                        translator = GoogleLibraryTranslator()
+                        print("📚 Использую Google Translate Library")
+                    
                     fallback_translator = FallbackTranslator()
                 except Exception as e:
-                    print(f"Не удалось инициализировать Google Translate: {e}")
+                    print(f"Не удалось инициализировать переводчик: {e}")
                     print("Использую fallback переводчик...")
                     translator = None
                     fallback_translator = FallbackTranslator()
@@ -719,13 +806,21 @@ def help_cmd(update: Update, context: CallbackContext):
 
 def status_cmd(update: Update, context: CallbackContext):
     """Проверяет статус переводчика"""
-    global translator
+    global translator, use_google_api
     
     if translator:
-        msg = "✅ Google Translate перакладчык працуе\n\n"
-        msg += "🌐 Крыніца: Google Translate API\n"
-        msg += "⚡ Хуткасць: онлайн пераклад\n"
-        msg += "🎯 Точнасць: высокая"
+        if use_google_api:
+            msg = "✅ Google Cloud Translate API перакладчык працуе\n\n"
+            msg += "🌐 Крыніца: Google Cloud Translate API\n"
+            msg += "⚡ Хуткасць: онлайн пераклад\n"
+            msg += "🎯 Точнасць: высокая\n"
+            msg += "💰 Кошт: платны API"
+        else:
+            msg = "✅ Google Translate Library перакладчык працуе\n\n"
+            msg += "📚 Крыніца: Google Translate Library (googletrans)\n"
+            msg += "⚡ Хуткасць: онлайн пераклад\n"
+            msg += "🎯 Точнасць: высокая\n"
+            msg += "💰 Кошт: бясплатны"
     else:
         msg = "❌ Google Translate перакладчык не даступны\n💡 Выкарыстоўваецца fallback перакладчык"
     
@@ -994,9 +1089,25 @@ def error_handler(update: Update, context: CallbackContext):
     print(f"Ошибка при обработке обновления: {context.error}")
 
 def main():
-    if not GOOGLE_AVAILABLE:
-        print("❌ Google Translate не доступен. Установите: pip install googletrans==4.0.0rc1")
-        sys.exit(1)
+    # Парсинг аргументов командной строки
+    parser = argparse.ArgumentParser(description='Telegram бот для перевода с русского на белорусский')
+    parser.add_argument('-google', '--google-api', action='store_true', 
+                       help='Использовать Google Cloud Translate API вместо библиотеки googletrans')
+    args = parser.parse_args()
+    
+    # Устанавливаем глобальный флаг
+    global use_google_api
+    use_google_api = args.google_api
+    
+    # Проверяем доступность нужных библиотек
+    if use_google_api:
+        if not GOOGLE_API_AVAILABLE:
+            print("❌ Google Cloud Translate API не доступен. Установите: pip install google-cloud-translate")
+            sys.exit(1)
+    else:
+        if not GOOGLE_LIBRARY_AVAILABLE:
+            print("❌ Google Translate Library не доступен. Установите: pip install googletrans==4.0.0rc1")
+            sys.exit(1)
     
     token = load_or_ask_token()
     
@@ -1032,8 +1143,13 @@ def main():
     # Добавляем обработчик ошибок
     dispatcher.add_error_handler(error_handler)
 
-    print("🌐 Бот перакладу праз Google Translate запущен. Наберите Ctrl+C для остановки.")
-    print("💡 Выкарыстоўваю Google Translate API для перакладу...")
+    # Показываем информацию о режиме работы
+    if use_google_api:
+        print("🌐 Бот перакладу праз Google Cloud Translate API запущен. Наберите Ctrl+C для остановки.")
+        print("💡 Выкарыстоўваю Google Cloud Translate API для перакладу...")
+    else:
+        print("📚 Бот перакладу праз Google Translate Library запущен. Наберите Ctrl+C для остановки.")
+        print("💡 Выкарыстоўваю Google Translate Library для перакладу...")
     
     # Запускаем бота
     try:
