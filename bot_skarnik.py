@@ -340,6 +340,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import re
     mention_match = re.search(mention_pattern, text, re.IGNORECASE)
     
+    print(f"🔍 Проверяю текст: '{text}'")
+    print(f"🔍 Паттерн: {mention_pattern}")
+    print(f"🔍 Найдено совпадение: {mention_match is not None}")
+    
     if mention_match:
         # Если есть упоминание, переводим только последнее слово из фразы
         phrase_after_mention = mention_match.group(1).strip()
