@@ -250,7 +250,7 @@ MIT License - свободное использование и модифика�
 ## 📞 Поддержка
 
 - **Issues**: [GitHub Issues](https://github.com/scroodge/Tg_Bot_Blr/issues)
-- **Telegram**: [@wayscr_bot](https://t.me/wayscr_bot)
+- **Telegram**: [@scroodge) ](https://t.me/scroodge)
 
 ## 🙏 Благодарности
 
