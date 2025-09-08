@@ -54,6 +54,39 @@ def load_or_ask_token() -> str:
     os.environ["TELEGRAM_BOT_TOKEN"] = token
     return token
 
+def load_admins_from_env() -> List[int]:
+    """Загружает список админов из .env файла"""
+    admins = []
+    
+    # Сначала проверяем переменную окружения
+    env_admins = os.environ.get("ADMIN_USER_IDS")
+    if env_admins:
+        try:
+            admins = [int(admin_id.strip()) for admin_id in env_admins.split(",") if admin_id.strip()]
+            print(f"📋 Загружены админы из переменной окружения: {admins}")
+            return admins
+        except ValueError as e:
+            print(f"❌ Ошибка парсинга ADMIN_USER_IDS: {e}")
+    
+    # Затем проверяем .env файл
+    if os.path.exists(ENV_PATH):
+        try:
+            with open(ENV_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("ADMIN_USER_IDS="):
+                        admin_ids_str = line.split("=", 1)[1].strip()
+                        if admin_ids_str:
+                            admins = [int(admin_id.strip()) for admin_id in admin_ids_str.split(",") if admin_id.strip()]
+                            print(f"📋 Загружены админы из .env: {admins}")
+                            return admins
+        except ValueError as e:
+            print(f"❌ Ошибка парсинга ADMIN_USER_IDS в .env: {e}")
+        except Exception as e:
+            print(f"❌ Ошибка чтения .env: {e}")
+    
+    print("📋 Админы не настроены. Добавьте ADMIN_USER_IDS в .env файл")
+    return admins
+
 # Переводчик через Google Translate API
 class GoogleTranslator:
     def __init__(self):
@@ -655,6 +688,7 @@ def start(update: Update, context: CallbackContext):
         "Админ-команды:\n"
         "/adminstats - детальная статистика\n"
         "/addadmin <id> - добавить админа\n"
+        "/listadmins - список админов\n"
         "/export - экспорт в CSV"
     )
     update.message.reply_text(msg)
@@ -679,6 +713,7 @@ def help_cmd(update: Update, context: CallbackContext):
         "Админ-команды:\n"
         "/adminstats - детальная статистика\n"
         "/addadmin <id> - добавить админа\n"
+        "/listadmins - список админов\n"
         "/export - экспорт в CSV"
     )
 
@@ -818,6 +853,40 @@ def export_stats_cmd(update: Update, context: CallbackContext):
     except Exception as e:
         update.message.reply_text(f"❌ Ошибка экспорта: {e}")
 
+def list_admins_cmd(update: Update, context: CallbackContext):
+    """Показывает список админов"""
+    user_id = update.message.from_user.id
+    
+    if not is_admin(user_id):
+        update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT user_id, username, added_date
+                FROM admins ORDER BY added_date
+            ''')
+            admins_data = cursor.fetchall()
+            
+            if not admins_data:
+                update.message.reply_text("📋 Список админов пуст")
+                return
+            
+            msg = "📋 **Список администраторов:**\n\n"
+            for i, (admin_id, username, added_date) in enumerate(admins_data, 1):
+                added = added_date[:16] if added_date else "неизвестно"
+                msg += f"{i}. ID: `{admin_id}`\n"
+                msg += f"   Username: @{username or 'не указан'}\n"
+                msg += f"   Добавлен: {added}\n\n"
+            
+            update.message.reply_text(msg, parse_mode='Markdown')
+            
+    except Exception as e:
+        update.message.reply_text(f"❌ Ошибка получения списка админов: {e}")
+
 # Перевод обычных сообщений
 def on_text(update: Update, context: CallbackContext):
     text = update.message.text
@@ -941,8 +1010,11 @@ def main():
     # Инициализируем базу данных
     init_database()
     
-    # Добавляем первого админа (владельца бота) - нужно указать ваш user_id
-    # add_admin(user_id=YOUR_USER_ID, username="bot_owner")
+    # Загружаем админов из .env файла
+    admin_ids = load_admins_from_env()
+    for admin_id in admin_ids:
+        add_admin(admin_id, f"admin_{admin_id}")
+        print(f"✅ Добавлен админ: {admin_id}")
     
     # Добавляем обработчики
     dispatcher.add_handler(CommandHandler("start", start))
@@ -952,6 +1024,7 @@ def main():
     dispatcher.add_handler(CommandHandler("mystats", my_stats_cmd))
     dispatcher.add_handler(CommandHandler("adminstats", admin_stats_cmd))
     dispatcher.add_handler(CommandHandler("addadmin", add_admin_cmd))
+    dispatcher.add_handler(CommandHandler("listadmins", list_admins_cmd))
     dispatcher.add_handler(CommandHandler("export", export_stats_cmd))
     dispatcher.add_handler(InlineQueryHandler(on_inline_query))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, on_text))
