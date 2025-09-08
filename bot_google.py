@@ -196,6 +196,10 @@ translator_lock = threading.Lock()
 translation_timers: Dict[int, threading.Timer] = {}
 translation_lock = threading.Lock()
 
+# Таймеры для инлайн-режима
+inline_timers: Dict[str, threading.Timer] = {}
+inline_lock = threading.Lock()
+
 def ensure_translator():
     global translator, fallback_translator
     
@@ -270,6 +274,69 @@ def schedule_translation(update: Update, context: CallbackContext, text: str, is
         timer.start()
         
         print(f"⏰ Запланирован перевод через 2 секунды для чата {chat_id}")
+
+def delayed_inline_translation(update: Update, context: CallbackContext, query: str):
+    """Выполняет инлайн-перевод с задержкой"""
+    try:
+        google_tr, fallback_tr = ensure_translator()
+        
+        if google_tr:
+            # Пробуем Google Translate
+            be = google_tr.translate_ru_to_be(query)
+            if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
+                results = [
+                    InlineQueryResultArticle(
+                        id=str(uuid4()),
+                        title="Пераклад на беларускую (Google)",
+                        input_message_content=InputTextMessageContent(be),
+                        description=be[:120]
+                    )
+                ]
+                update.inline_query.answer(results, cache_time=0, is_personal=True)
+                return
+        
+        # Если Google не сработал, используем fallback
+        be = fallback_tr.translate_ru_to_be(query)
+        if not be or be.startswith("Пераклад не знойдзены"):
+            be = "Пераклад не атрымаўся"
+        
+        results = [
+            InlineQueryResultArticle(
+                id=str(uuid4()),
+                title="Пераклад на беларускую (Fallback)",
+                input_message_content=InputTextMessageContent(be),
+                description=be[:120]
+            )
+        ]
+        update.inline_query.answer(results, cache_time=0, is_personal=True)
+        
+    except Exception as e:
+        print(f"❌ Ошибка в инлайн-переводе: {e}")
+        results = [
+            InlineQueryResultArticle(
+                id=str(uuid4()),
+                title="Памылка перакладу",
+                input_message_content=InputTextMessageContent(f"Памылка: {e}"),
+                description="Праверце тэкст і паспрабуйце зноў"
+            )
+        ]
+        update.inline_query.answer(results, cache_time=0, is_personal=True)
+
+def schedule_inline_translation(update: Update, context: CallbackContext, query: str):
+    """Планирует инлайн-перевод с задержкой 1 секунда"""
+    user_id = update.inline_query.from_user.id
+    
+    with inline_lock:
+        # Отменяем предыдущий таймер для этого пользователя
+        if user_id in inline_timers:
+            inline_timers[user_id].cancel()
+        
+        # Создаем новый таймер
+        timer = threading.Timer(1.0, delayed_inline_translation, args=(update, context, query))
+        inline_timers[user_id] = timer
+        timer.start()
+        
+        print(f"⏰ Запланирован инлайн-перевод через 1 секунду для пользователя {user_id}")
 
 # Команды
 def start(update: Update, context: CallbackContext):
@@ -399,50 +466,9 @@ def on_inline_query(update: Update, context: CallbackContext):
         update.inline_query.answer(results, cache_time=0, is_personal=True)
         return
 
-    google_tr, fallback_tr = ensure_translator()
-    
-    try:
-        if google_tr:
-            # Пробуем Google Translate
-            be = google_tr.translate_ru_to_be(query)
-            if be and not be.startswith("Памылка") and not be.startswith("Пераклад не знойдзены"):
-                results = [
-                    InlineQueryResultArticle(
-                        id=str(uuid4()),
-                        title="Пераклад на беларускую (Google)",
-                        input_message_content=InputTextMessageContent(be),
-                        description=be[:120]
-                    )
-                ]
-                update.inline_query.answer(results, cache_time=0, is_personal=True)
-                return
-        
-        # Если Google не сработал, используем fallback
-        be = fallback_tr.translate_ru_to_be(query)
-        if not be or be.startswith("Пераклад не знойдзены"):
-            be = "Пераклад не атрымаўся"
-        
-        results = [
-            InlineQueryResultArticle(
-                id=str(uuid4()),
-                title="Пераклад на беларускую (Fallback)",
-                input_message_content=InputTextMessageContent(be),
-                description=be[:120]
-            )
-        ]
-        update.inline_query.answer(results, cache_time=0, is_personal=True)
-        
-    except Exception as e:
-        print(f"❌ Ошибка в инлайн-режиме: {e}")
-        results = [
-            InlineQueryResultArticle(
-                id=str(uuid4()),
-                title="Памылка перакладу",
-                input_message_content=InputTextMessageContent(f"Памылка: {e}"),
-                description="Праверце тэкст і паспрабуйце зноў"
-            )
-        ]
-        update.inline_query.answer(results, cache_time=0, is_personal=True)
+    # Планируем инлайн-перевод с задержкой 1 секунда
+    print(f"🔍 Планирую инлайн-перевод: '{query}' через 1 секунду")
+    schedule_inline_translation(update, context, query)
 
 def error_handler(update: Update, context: CallbackContext):
     """Обработчик ошибок"""
