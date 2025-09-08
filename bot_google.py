@@ -9,6 +9,8 @@ import sys
 import threading
 import time
 import re
+import json
+from datetime import datetime
 from typing import Optional, Dict
 
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
@@ -200,6 +202,109 @@ translation_lock = threading.Lock()
 inline_timers: Dict[str, threading.Timer] = {}
 inline_lock = threading.Lock()
 
+# Система логирования пользователей
+user_stats: Dict[int, Dict] = {}
+stats_lock = threading.Lock()
+STATS_FILE = "user_stats.json"
+
+def load_user_stats():
+    """Загружает статистику пользователей из файла"""
+    global user_stats
+    try:
+        if os.path.exists(STATS_FILE):
+            with open(STATS_FILE, 'r', encoding='utf-8') as f:
+                user_stats = json.load(f)
+            print(f"📊 Загружена статистика для {len(user_stats)} пользователей")
+        else:
+            user_stats = {}
+            print("📊 Статистика пользователей инициализирована")
+    except Exception as e:
+        print(f"❌ Ошибка загрузки статистики: {e}")
+        user_stats = {}
+
+def save_user_stats():
+    """Сохраняет статистику пользователей в файл"""
+    try:
+        with open(STATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(user_stats, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"❌ Ошибка сохранения статистики: {e}")
+
+def log_user_request(user_id: int, username: str, first_name: str, last_name: str, request_type: str, text: str = ""):
+    """Логирует запрос пользователя"""
+    with stats_lock:
+        if user_id not in user_stats:
+            user_stats[user_id] = {
+                "username": username,
+                "first_name": first_name,
+                "last_name": last_name,
+                "total_requests": 0,
+                "inline_requests": 0,
+                "message_requests": 0,
+                "mention_requests": 0,
+                "last_activity": "",
+                "first_seen": datetime.now().isoformat(),
+                "requests_history": []
+            }
+        
+        # Обновляем информацию о пользователе
+        user_stats[user_id]["username"] = username or user_stats[user_id]["username"]
+        user_stats[user_id]["first_name"] = first_name or user_stats[user_id]["first_name"]
+        user_stats[user_id]["last_name"] = last_name or user_stats[user_id]["last_name"]
+        user_stats[user_id]["total_requests"] += 1
+        user_stats[user_id]["last_activity"] = datetime.now().isoformat()
+        
+        # Увеличиваем счетчик по типу запроса
+        if request_type == "inline":
+            user_stats[user_id]["inline_requests"] += 1
+        elif request_type == "message":
+            user_stats[user_id]["message_requests"] += 1
+        elif request_type == "mention":
+            user_stats[user_id]["mention_requests"] += 1
+        
+        # Добавляем в историю (последние 50 запросов)
+        request_record = {
+            "timestamp": datetime.now().isoformat(),
+            "type": request_type,
+            "text": text[:100] if text else "",  # Ограничиваем длину
+            "length": len(text) if text else 0
+        }
+        user_stats[user_id]["requests_history"].append(request_record)
+        
+        # Ограничиваем историю последними 50 запросами
+        if len(user_stats[user_id]["requests_history"]) > 50:
+            user_stats[user_id]["requests_history"] = user_stats[user_id]["requests_history"][-50:]
+        
+        # Сохраняем статистику каждые 10 запросов
+        if user_stats[user_id]["total_requests"] % 10 == 0:
+            save_user_stats()
+        
+        # Логируем в консоль
+        print(f"📊 Пользователь {user_id} ({username or first_name}): {request_type} запрос #{user_stats[user_id]['total_requests']}")
+
+def get_user_stats_summary():
+    """Возвращает сводку статистики пользователей"""
+    with stats_lock:
+        if not user_stats:
+            return "📊 Статистика пуста"
+        
+        total_users = len(user_stats)
+        total_requests = sum(stats["total_requests"] for stats in user_stats.values())
+        
+        # Топ-5 пользователей по количеству запросов
+        top_users = sorted(user_stats.items(), key=lambda x: x[1]["total_requests"], reverse=True)[:5]
+        
+        summary = f"📊 **Статистика пользователей**\n\n"
+        summary += f"👥 Всего пользователей: {total_users}\n"
+        summary += f"📝 Всего запросов: {total_requests}\n\n"
+        summary += f"🏆 **Топ-5 пользователей:**\n"
+        
+        for i, (user_id, stats) in enumerate(top_users, 1):
+            name = stats["username"] or stats["first_name"] or f"ID:{user_id}"
+            summary += f"{i}. {name}: {stats['total_requests']} запросов\n"
+        
+        return summary
+
 def ensure_translator():
     global translator, fallback_translator
     
@@ -372,7 +477,9 @@ def start(update: Update, context: CallbackContext):
         "Каманды:\n"
         "/start - пачатак\n"
         "/help - дапамога\n"
-        "/status - статус перакладчыка"
+        "/status - статус перакладчыка\n"
+        "/stats - статистика всех пользователей\n"
+        "/mystats - ваша статистика"
     )
     update.message.reply_text(msg)
 
@@ -390,7 +497,9 @@ def help_cmd(update: Update, context: CallbackContext):
         "⏰ Пераклад адбываецца праз 2 секунды пасля апошняга ўводу.\n"
         "Бот выкарыстоўвае Google Translate API для перакладу.\n"
         "Каманды:\n"
-        "/status - статус перакладчыка"
+        "/status - статус перакладчыка\n"
+        "/stats - статистика всех пользователей\n"
+        "/mystats - ваша статистика"
     )
 
 def status_cmd(update: Update, context: CallbackContext):
@@ -407,10 +516,52 @@ def status_cmd(update: Update, context: CallbackContext):
     
     update.message.reply_text(msg)
 
+def stats_cmd(update: Update, context: CallbackContext):
+    """Показывает статистику пользователей"""
+    summary = get_user_stats_summary()
+    update.message.reply_text(summary, parse_mode='Markdown')
+
+def my_stats_cmd(update: Update, context: CallbackContext):
+    """Показывает статистику текущего пользователя"""
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username
+    first_name = update.message.from_user.first_name
+    last_name = update.message.from_user.last_name
+    
+    with stats_lock:
+        if user_id not in user_stats:
+            update.message.reply_text("📊 У вас пока нет статистики. Сделайте несколько запросов!")
+            return
+        
+        stats = user_stats[user_id]
+        msg = f"📊 **Ваша статистика**\n\n"
+        msg += f"👤 Имя: {first_name} {last_name or ''}\n"
+        msg += f"🆔 Username: @{username or 'не указан'}\n"
+        msg += f"📝 Всего запросов: {stats['total_requests']}\n"
+        msg += f"  • Обычные сообщения: {stats['message_requests']}\n"
+        msg += f"  • Инлайн-запросы: {stats['inline_requests']}\n"
+        msg += f"  • Упоминания: {stats['mention_requests']}\n"
+        msg += f"🕐 Первое использование: {stats['first_seen'][:19]}\n"
+        msg += f"🕐 Последняя активность: {stats['last_activity'][:19]}\n"
+        
+        # Последние 5 запросов
+        if stats['requests_history']:
+            msg += f"\n📋 **Последние запросы:**\n"
+            for req in stats['requests_history'][-5:]:
+                msg += f"• {req['type']}: {req['text'][:30]}{'...' if len(req['text']) > 30 else ''}\n"
+    
+    update.message.reply_text(msg, parse_mode='Markdown')
+
 # Перевод обычных сообщений
 def on_text(update: Update, context: CallbackContext):
     text = update.message.text
     bot_username = context.bot.username
+    
+    # Логируем пользователя
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username
+    first_name = update.message.from_user.first_name
+    last_name = update.message.from_user.last_name
     
     print(f"📨 ПОЛУЧЕНО СООБЩЕНИЕ: '{text}'")
     
@@ -458,11 +609,17 @@ def on_text(update: Update, context: CallbackContext):
         
         print(f"🔍 Планирую перевод слова: '{word_to_translate}' через 2 секунды")
         
+        # Логируем упоминание
+        log_user_request(user_id, username, first_name, last_name, "mention", word_to_translate)
+        
         # Планируем перевод с задержкой
         schedule_translation(update, context, text, is_mention=True, word_to_translate=word_to_translate)
     else:
         # Если нет упоминания, переводим весь текст с задержкой
         print(f"🔍 Планирую перевод текста: '{text}' через 2 секунды")
+        
+        # Логируем обычное сообщение
+        log_user_request(user_id, username, first_name, last_name, "message", text)
         
         # Планируем перевод с задержкой
         schedule_translation(update, context, text, is_mention=False)
@@ -471,6 +628,12 @@ def on_text(update: Update, context: CallbackContext):
 def on_inline_query(update: Update, context: CallbackContext):
     query = (update.inline_query.query or "").strip()
     print(f"🔍 ИНЛАЙН ЗАПРОС: '{query}'")
+    
+    # Логируем пользователя для инлайн-запросов
+    user_id = update.inline_query.from_user.id
+    username = update.inline_query.from_user.username
+    first_name = update.inline_query.from_user.first_name
+    last_name = update.inline_query.from_user.last_name
     
     if not query:
         results = [
@@ -483,6 +646,9 @@ def on_inline_query(update: Update, context: CallbackContext):
         ]
         update.inline_query.answer(results, cache_time=0, is_personal=True)
         return
+
+    # Логируем инлайн-запрос
+    log_user_request(user_id, username, first_name, last_name, "inline", query)
 
     # Планируем инлайн-перевод с задержкой 1 секунда
     print(f"🔍 Планирую инлайн-перевод: '{query}' через 1 секунду")
@@ -506,10 +672,15 @@ def main():
     print(f"🔧 Токен: {token[:10]}...")
     print(f"🔧 Updater создан")
     
+    # Загружаем статистику пользователей
+    load_user_stats()
+    
     # Добавляем обработчики
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help_cmd))
     dispatcher.add_handler(CommandHandler("status", status_cmd))
+    dispatcher.add_handler(CommandHandler("stats", stats_cmd))
+    dispatcher.add_handler(CommandHandler("mystats", my_stats_cmd))
     dispatcher.add_handler(InlineQueryHandler(on_inline_query))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, on_text))
     
@@ -523,8 +694,13 @@ def main():
     try:
         updater.start_polling()
         updater.idle()
+    except KeyboardInterrupt:
+        print("\n🛑 Остановка бота...")
+        save_user_stats()
+        print("📊 Статистика сохранена")
     except Exception as e:
         print(f"Критическая ошибка: {e}")
+        save_user_stats()
 
 if __name__ == "__main__":
     main()
