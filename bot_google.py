@@ -1,4 +1,4 @@
-бота добавить #!/usr/bin/env python3
+
 """
 Telegram бот для перевода с русского на белорусский через Google Translate API
 Совместим с python-telegram-bot==13.15
