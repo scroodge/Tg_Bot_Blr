@@ -154,8 +154,24 @@ class GeminiAPITranslator:
         
         # Настраиваем Gemini API
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-pro')
-        print("✅ Gemini API переводчик инициализирован")
+        
+        # Пробуем разные модели в порядке предпочтения
+        model_names = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        self.model = None
+        
+        for model_name in model_names:
+            try:
+                self.model = genai.GenerativeModel(model_name)
+                # Тестируем модель простым запросом
+                test_response = self.model.generate_content("тест")
+                print(f"✅ Gemini API переводчик инициализирован с моделью: {model_name}")
+                break
+            except Exception as e:
+                print(f"⚠️ Модель {model_name} недоступна: {e}")
+                continue
+        
+        if self.model is None:
+            raise Exception("Не удалось инициализировать ни одну модель Gemini")
 
     def translate_ru_to_be(self, text: str, max_len: int = 512) -> str:
         text = text.strip()
@@ -166,17 +182,32 @@ class GeminiAPITranslator:
             print(f"🔍 Перевожу через Gemini API: '{text}'")
             
             # Формируем промпт для перевода
-            prompt = f"""Переведи следующий текст с русского на белорусский язык. Отвечай только переводом, без дополнительных объяснений.
+            prompt = f"""Переведи следующий текст с русского языка на белорусский язык. Отвечай ТОЛЬКО переводом, без дополнительных объяснений, без кавычек, без префиксов.
 
-Русский текст: {text}
+Текст для перевода: {text}
 
-Белорусский перевод:"""
+Перевод:"""
             
             # Отправляем запрос к Gemini
             response = self.model.generate_content(prompt)
             
             if response and response.text:
                 translation = response.text.strip()
+                
+                # Очищаем ответ от возможных префиксов
+                if translation.startswith("Перевод:"):
+                    translation = translation[8:].strip()
+                if translation.startswith("Белорусский перевод:"):
+                    translation = translation[20:].strip()
+                if translation.startswith("Беларускі пераклад:"):
+                    translation = translation[19:].strip()
+                
+                # Убираем кавычки если есть
+                if translation.startswith('"') and translation.endswith('"'):
+                    translation = translation[1:-1]
+                if translation.startswith("'") and translation.endswith("'"):
+                    translation = translation[1:-1]
+                
                 print(f"✅ Gemini API перевод: '{text}' → '{translation}'")
                 return translation
             else:
