@@ -1,5 +1,17 @@
+# Telegram Bot Framework
 python-telegram-bot==13.15
+
+# Google Translate Library (бесплатный режим)
 googletrans==4.0.0rc1
+
+# Google Gemini API (премиум режим)
 google-generativeai>=0.3.0
+
+# HTTP клиенты
 httpx==0.13.3
 requests>=2.25.0
+
+# Дополнительные зависимости (автоматически устанавливаются)
+# sqlite3 - встроенная в Python
+# threading - встроенная в Python
+# argparse - встроенная в Python
