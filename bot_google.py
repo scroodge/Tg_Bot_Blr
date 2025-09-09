@@ -26,13 +26,13 @@ except ImportError:
     GOOGLE_LIBRARY_AVAILABLE = False
     print("❌ googletrans не установлен. Установите: pip install googletrans==4.0.0rc1")
 
-# Google Cloud Translate API
+# Gemini API
 try:
-    from google.cloud import translate_v2 as translate
-    GOOGLE_API_AVAILABLE = True
+    import google.generativeai as genai
+    GEMINI_API_AVAILABLE = True
 except ImportError:
-    GOOGLE_API_AVAILABLE = False
-    print("❌ google-cloud-translate не установлен. Установите: pip install google-cloud-translate")
+    GEMINI_API_AVAILABLE = False
+    print("❌ google-generativeai не установлен. Установите: pip install google-generativeai")
 
 ENV_PATH = ".env"
 
@@ -63,9 +63,9 @@ def load_or_ask_token() -> str:
     os.environ["TELEGRAM_BOT_TOKEN"] = token
     return token
 
-def load_google_api_key() -> Optional[str]:
-    """Загружает Google API ключ из .env файла"""
-    api_key = os.environ.get("GOOGLE_API_KEY")
+def load_gemini_api_key() -> Optional[str]:
+    """Загружает Gemini API ключ из .env файла"""
+    api_key = os.environ.get("GEMINI_API_KEY")
     if api_key:
         return api_key.strip()
 
@@ -73,10 +73,10 @@ def load_google_api_key() -> Optional[str]:
     if os.path.exists(ENV_PATH):
         with open(ENV_PATH, "r", encoding="utf-8") as f:
             for line in f:
-                if line.startswith("GOOGLE_API_KEY="):
+                if line.startswith("GEMINI_API_KEY="):
                     api_key = line.split("=", 1)[1].strip()
                     if api_key:
-                        os.environ["GOOGLE_API_KEY"] = api_key
+                        os.environ["GEMINI_API_KEY"] = api_key
                         return api_key
     
     return None
@@ -146,16 +146,16 @@ class GoogleLibraryTranslator:
             print(f"❌ Ошибка Google Library: {e}")
             return f"Памылка перакладу: {e}"
 
-# Переводчик через Google Cloud Translate API
-class GoogleAPITranslator:
+# Переводчик через Gemini API
+class GeminiAPITranslator:
     def __init__(self, api_key: str):
-        if not GOOGLE_API_AVAILABLE:
-            raise ImportError("google-cloud-translate не установлен")
+        if not GEMINI_API_AVAILABLE:
+            raise ImportError("google-generativeai не установлен")
         
-        # Устанавливаем API ключ
-        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = api_key
-        self.client = translate.Client()
-        print("✅ Google Cloud Translate API переводчик инициализирован")
+        # Настраиваем Gemini API
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel('gemini-pro')
+        print("✅ Gemini API переводчик инициализирован")
 
     def translate_ru_to_be(self, text: str, max_len: int = 512) -> str:
         text = text.strip()
@@ -163,21 +163,28 @@ class GoogleAPITranslator:
             return ""
         
         try:
-            print(f"🔍 Перевожу через Google API: '{text}'")
+            print(f"🔍 Перевожу через Gemini API: '{text}'")
             
-            # Google Cloud Translate API
-            result = self.client.translate(text, source_language='ru', target_language='be')
+            # Формируем промпт для перевода
+            prompt = f"""Переведи следующий текст с русского на белорусский язык. Отвечай только переводом, без дополнительных объяснений.
+
+Русский текст: {text}
+
+Белорусский перевод:"""
             
-            if result and 'translatedText' in result:
-                translation = result['translatedText'].strip()
-                print(f"✅ Google API перевод: '{text}' → '{translation}'")
+            # Отправляем запрос к Gemini
+            response = self.model.generate_content(prompt)
+            
+            if response and response.text:
+                translation = response.text.strip()
+                print(f"✅ Gemini API перевод: '{text}' → '{translation}'")
                 return translation
             else:
-                print(f"❌ Google API не вернул перевод для: '{text}'")
+                print(f"❌ Gemini API не вернул перевод для: '{text}'")
                 return f"Пераклад не знойдзены для: {text}"
                 
         except Exception as e:
-            print(f"❌ Ошибка Google API: {e}")
+            print(f"❌ Ошибка Gemini API: {e}")
             return f"Памылка перакладу: {e}"
 
 # Fallback переводчик с базовым словарем
@@ -288,7 +295,7 @@ class FallbackTranslator:
 translator = None
 fallback_translator: Optional[FallbackTranslator] = None
 translator_lock = threading.Lock()
-use_google_api = False  # Флаг для выбора между API и библиотекой
+use_gemini_api = False  # Флаг для выбора между API и библиотекой
 
 # Таймеры для задержки перевода
 translation_timers: Dict[int, threading.Timer] = {}
@@ -574,27 +581,27 @@ def get_detailed_stats():
         return None
 
 def ensure_translator():
-    global translator, fallback_translator, use_google_api
+    global translator, fallback_translator, use_gemini_api
     
     if translator is None:
         with translator_lock:
             if translator is None:
                 try:
-                    if use_google_api:
-                        # Используем Google Cloud Translate API
-                        api_key = load_google_api_key()
+                    if use_gemini_api:
+                        # Используем Gemini API
+                        api_key = load_gemini_api_key()
                         if not api_key:
-                            print("❌ Google API ключ не найден в .env файле")
-                            print("💡 Добавьте GOOGLE_API_KEY=your_api_key в .env файл")
-                            raise ValueError("Google API ключ не найден")
+                            print("❌ Gemini API ключ не найден в .env файле")
+                            print("💡 Добавьте GEMINI_API_KEY=your_api_key в .env файл")
+                            raise ValueError("Gemini API ключ не найден")
                         
-                        if not GOOGLE_API_AVAILABLE:
-                            print("❌ Google Cloud Translate API не установлен")
-                            print("💡 Установите: pip install google-cloud-translate")
-                            raise ImportError("google-cloud-translate не установлен")
+                        if not GEMINI_API_AVAILABLE:
+                            print("❌ Gemini API не установлен")
+                            print("💡 Установите: pip install google-generativeai")
+                            raise ImportError("google-generativeai не установлен")
                         
-                        translator = GoogleAPITranslator(api_key)
-                        print("🌐 Использую Google Cloud Translate API")
+                        translator = GeminiAPITranslator(api_key)
+                        print("🤖 Использую Gemini API")
                     else:
                         # Используем Google Translate Library
                         if not GOOGLE_LIBRARY_AVAILABLE:
@@ -806,15 +813,15 @@ def help_cmd(update: Update, context: CallbackContext):
 
 def status_cmd(update: Update, context: CallbackContext):
     """Проверяет статус переводчика"""
-    global translator, use_google_api
+    global translator, use_gemini_api
     
     if translator:
-        if use_google_api:
-            msg = "✅ Google Cloud Translate API перакладчык працуе\n\n"
-            msg += "🌐 Крыніца: Google Cloud Translate API\n"
+        if use_gemini_api:
+            msg = "✅ Gemini API перакладчык працуе\n\n"
+            msg += "🤖 Крыніца: Google Gemini API\n"
             msg += "⚡ Хуткасць: онлайн пераклад\n"
             msg += "🎯 Точнасць: высокая\n"
-            msg += "💰 Кошт: платны API"
+            msg += "💰 Кошт: платны API (але танней за Google Translate)"
         else:
             msg = "✅ Google Translate Library перакладчык працуе\n\n"
             msg += "📚 Крыніца: Google Translate Library (googletrans)\n"
@@ -1092,17 +1099,17 @@ def main():
     # Парсинг аргументов командной строки
     parser = argparse.ArgumentParser(description='Telegram бот для перевода с русского на белорусский')
     parser.add_argument('-google', '--google-api', action='store_true', 
-                       help='Использовать Google Cloud Translate API вместо библиотеки googletrans')
+                       help='Использовать Gemini API вместо библиотеки googletrans')
     args = parser.parse_args()
     
     # Устанавливаем глобальный флаг
-    global use_google_api
-    use_google_api = args.google_api
+    global use_gemini_api
+    use_gemini_api = args.google_api
     
     # Проверяем доступность нужных библиотек
-    if use_google_api:
-        if not GOOGLE_API_AVAILABLE:
-            print("❌ Google Cloud Translate API не доступен. Установите: pip install google-cloud-translate")
+    if use_gemini_api:
+        if not GEMINI_API_AVAILABLE:
+            print("❌ Gemini API не доступен. Установите: pip install google-generativeai")
             sys.exit(1)
     else:
         if not GOOGLE_LIBRARY_AVAILABLE:
@@ -1144,9 +1151,9 @@ def main():
     dispatcher.add_error_handler(error_handler)
 
     # Показываем информацию о режиме работы
-    if use_google_api:
-        print("🌐 Бот перакладу праз Google Cloud Translate API запущен. Наберите Ctrl+C для остановки.")
-        print("💡 Выкарыстоўваю Google Cloud Translate API для перакладу...")
+    if use_gemini_api:
+        print("🤖 Бот перакладу праз Gemini API запущен. Наберите Ctrl+C для остановки.")
+        print("💡 Выкарыстоўваю Gemini API для перакладу...")
     else:
         print("📚 Бот перакладу праз Google Translate Library запущен. Наберите Ctrl+C для остановки.")
         print("💡 Выкарыстоўваю Google Translate Library для перакладу...")
