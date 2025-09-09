@@ -34,6 +34,14 @@ except ImportError:
     GEMINI_API_AVAILABLE = False
     print("❌ google-generativeai не установлен. Установите: pip install google-generativeai")
 
+# DeepSeek API
+try:
+    import openai
+    DEEPSEEK_API_AVAILABLE = True
+except ImportError:
+    DEEPSEEK_API_AVAILABLE = False
+    print("❌ openai не установлен. Установите: pip install openai")
+
 ENV_PATH = ".env"
 
 def load_or_ask_token() -> str:
@@ -77,6 +85,24 @@ def load_gemini_api_key() -> Optional[str]:
                     api_key = line.split("=", 1)[1].strip()
                     if api_key:
                         os.environ["GEMINI_API_KEY"] = api_key
+                        return api_key
+    
+    return None
+
+def load_deepseek_api_key() -> Optional[str]:
+    """Загружает DeepSeek API ключ из .env файла"""
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if api_key:
+        return api_key.strip()
+
+    # Попытка прочитать из .env
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("DEEPSEEK_API_KEY="):
+                    api_key = line.split("=", 1)[1].strip()
+                    if api_key:
+                        os.environ["DEEPSEEK_API_KEY"] = api_key
                         return api_key
     
     return None
@@ -144,6 +170,72 @@ class GoogleLibraryTranslator:
                 
         except Exception as e:
             print(f"❌ Ошибка Google Library: {e}")
+            return f"Памылка перакладу: {e}"
+
+# Переводчик через DeepSeek API
+class DeepSeekAPITranslator:
+    def __init__(self, api_key: str):
+        if not DEEPSEEK_API_AVAILABLE:
+            raise ImportError("openai не установлен")
+        
+        # Настраиваем DeepSeek API
+        self.client = openai.OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com"
+        )
+        print("✅ DeepSeek API переводчик инициализирован")
+
+    def translate_ru_to_be(self, text: str, max_len: int = 512) -> str:
+        text = text.strip()
+        if not text:
+            return ""
+        
+        try:
+            print(f"🔍 Перевожу через DeepSeek API: '{text}'")
+            
+            # Формируем промпт для перевода
+            prompt = f"""Переведи следующий текст с русского языка на белорусский язык. Отвечай ТОЛЬКО переводом, без дополнительных объяснений, без кавычек, без префиксов.
+
+Текст для перевода: {text}
+
+Перевод:"""
+            
+            # Отправляем запрос к DeepSeek
+            response = self.client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "Ты - эксперт по переводу с русского на белорусский язык."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_len,
+                temperature=0.1
+            )
+            
+            if response and response.choices and response.choices[0].message.content:
+                translation = response.choices[0].message.content.strip()
+                
+                # Очищаем ответ от возможных префиксов
+                if translation.startswith("Перевод:"):
+                    translation = translation[8:].strip()
+                if translation.startswith("Белорусский перевод:"):
+                    translation = translation[20:].strip()
+                if translation.startswith("Беларускі пераклад:"):
+                    translation = translation[19:].strip()
+                
+                # Убираем кавычки если есть
+                if translation.startswith('"') and translation.endswith('"'):
+                    translation = translation[1:-1]
+                if translation.startswith("'") and translation.endswith("'"):
+                    translation = translation[1:-1]
+                
+                print(f"✅ DeepSeek API перевод: '{text}' → '{translation}'")
+                return translation
+            else:
+                print(f"❌ DeepSeek API не вернул перевод для: '{text}'")
+                return f"Пераклад не знойдзены для: {text}"
+                
+        except Exception as e:
+            print(f"❌ Ошибка DeepSeek API: {e}")
             return f"Памылка перакладу: {e}"
 
 # Переводчик через Gemini API
@@ -327,6 +419,7 @@ translator = None
 fallback_translator: Optional[FallbackTranslator] = None
 translator_lock = threading.Lock()
 use_gemini_api = False  # Флаг для выбора между API и библиотекой
+use_deepseek_api = False  # Флаг для выбора DeepSeek API
 
 # Таймеры для задержки перевода
 translation_timers: Dict[int, threading.Timer] = {}
@@ -612,13 +705,28 @@ def get_detailed_stats():
         return None
 
 def ensure_translator():
-    global translator, fallback_translator, use_gemini_api
+    global translator, fallback_translator, use_gemini_api, use_deepseek_api
     
     if translator is None:
         with translator_lock:
             if translator is None:
                 try:
-                    if use_gemini_api:
+                    if use_deepseek_api:
+                        # Используем DeepSeek API
+                        api_key = load_deepseek_api_key()
+                        if not api_key:
+                            print("❌ DeepSeek API ключ не найден в .env файле")
+                            print("💡 Добавьте DEEPSEEK_API_KEY=your_api_key в .env файл")
+                            raise ValueError("DeepSeek API ключ не найден")
+                        
+                        if not DEEPSEEK_API_AVAILABLE:
+                            print("❌ DeepSeek API не установлен")
+                            print("💡 Установите: pip install openai")
+                            raise ImportError("openai не установлен")
+                        
+                        translator = DeepSeekAPITranslator(api_key)
+                        print("🧠 Использую DeepSeek API")
+                    elif use_gemini_api:
                         # Используем Gemini API
                         api_key = load_gemini_api_key()
                         if not api_key:
@@ -844,10 +952,16 @@ def help_cmd(update: Update, context: CallbackContext):
 
 def status_cmd(update: Update, context: CallbackContext):
     """Проверяет статус переводчика"""
-    global translator, use_gemini_api
+    global translator, use_gemini_api, use_deepseek_api
     
     if translator:
-        if use_gemini_api:
+        if use_deepseek_api:
+            msg = "✅ DeepSeek API перакладчык працуе\n\n"
+            msg += "🧠 Крыніца: DeepSeek API\n"
+            msg += "⚡ Хуткасць: онлайн пераклад\n"
+            msg += "🎯 Точнасць: высокая\n"
+            msg += "💰 Кошт: платны API (танней за Gemini)"
+        elif use_gemini_api:
             msg = "✅ Gemini API перакладчык працуе\n\n"
             msg += "🤖 Крыніца: Google Gemini API\n"
             msg += "⚡ Хуткасць: онлайн пераклад\n"
@@ -860,7 +974,7 @@ def status_cmd(update: Update, context: CallbackContext):
             msg += "🎯 Точнасць: высокая\n"
             msg += "💰 Кошт: бясплатны"
     else:
-        msg = "❌ Google Translate перакладчык не даступны\n💡 Выкарыстоўваецца fallback перакладчык"
+        msg = "❌ Перакладчык не даступны\n💡 Выкарыстоўваецца fallback перакладчык"
     
     update.message.reply_text(msg)
 
@@ -1131,14 +1245,21 @@ def main():
     parser = argparse.ArgumentParser(description='Telegram бот для перевода с русского на белорусский')
     parser.add_argument('-google', '--google-api', action='store_true', 
                        help='Использовать Gemini API вместо библиотеки googletrans')
+    parser.add_argument('--deepseek', action='store_true',
+                       help='Использовать DeepSeek API вместо библиотеки googletrans')
     args = parser.parse_args()
     
-    # Устанавливаем глобальный флаг
-    global use_gemini_api
+    # Устанавливаем глобальные флаги
+    global use_gemini_api, use_deepseek_api
     use_gemini_api = args.google_api
+    use_deepseek_api = args.deepseek
     
     # Проверяем доступность нужных библиотек
-    if use_gemini_api:
+    if use_deepseek_api:
+        if not DEEPSEEK_API_AVAILABLE:
+            print("❌ DeepSeek API не доступен. Установите: pip install openai")
+            sys.exit(1)
+    elif use_gemini_api:
         if not GEMINI_API_AVAILABLE:
             print("❌ Gemini API не доступен. Установите: pip install google-generativeai")
             sys.exit(1)
@@ -1182,7 +1303,10 @@ def main():
     dispatcher.add_error_handler(error_handler)
 
     # Показываем информацию о режиме работы
-    if use_gemini_api:
+    if use_deepseek_api:
+        print("🧠 Бот перакладу праз DeepSeek API запущен. Наберите Ctrl+C для остановки.")
+        print("💡 Выкарыстоўваю DeepSeek API для перакладу...")
+    elif use_gemini_api:
         print("🤖 Бот перакладу праз Gemini API запущен. Наберите Ctrl+C для остановки.")
         print("💡 Выкарыстоўваю Gemini API для перакладу...")
     else:
